@@ -131,3 +131,53 @@ class ExportArtifact(Base):
     format: Mapped[str] = mapped_column(String)  # csv|xlsx|pdf
     storage_path: Mapped[str] = mapped_column(String)
     generated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class PipelineRun(Base):
+    """One agent-orchestrated run: profiling -> problem detection -> preprocessing ->
+    model execution -> recommendation -> reporting. Additive to the existing Job-centric
+    clustering flow — when problem_type == 'clustering', a PipelineRun creates and delegates
+    to a regular Job row (see agents/orchestrator.py), so the existing jobs/cluster_runs/
+    approvals tables and their routers keep working completely unchanged."""
+
+    __tablename__ = "pipeline_runs"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id"))
+    declared_target: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="profiling")
+    # profiling | awaiting_problem_approval | model_execution |
+    # awaiting_recommendation_approval | reporting | completed | failed
+    problem_type: Mapped[str | None] = mapped_column(String, nullable=True)
+    job_id: Mapped[str | None] = mapped_column(ForeignKey("jobs.id"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    decisions: Mapped[list["AgentDecision"]] = relationship(
+        back_populates="pipeline_run", order_by="AgentDecision.created_at"
+    )
+
+
+class AgentDecision(Base):
+    """Durable record of every agent judgment call: what was proposed, how confident the
+    agent was, why, and what a human did about it. Powers the HITL review cards, the agent
+    activity timeline, and the Reporting Agent's decision-trail narrative."""
+
+    __tablename__ = "agent_decisions"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    pipeline_run_id: Mapped[str] = mapped_column(ForeignKey("pipeline_runs.id"))
+    agent_name: Mapped[str] = mapped_column(String)
+    stage: Mapped[str] = mapped_column(String)
+    decision_json: Mapped[dict] = mapped_column(JSON, default=dict)
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    reasoning_text: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(String, default="proposed")  # proposed|approved|edited|rejected
+    human_edits_json: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    override_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    approved_by: Mapped[str | None] = mapped_column(String, nullable=True)
+    approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    pipeline_run: Mapped["PipelineRun"] = relationship(back_populates="decisions")

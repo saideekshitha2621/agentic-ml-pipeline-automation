@@ -1,13 +1,28 @@
 import { Box, Button, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from "@mui/material";
+import { SmartToy } from "@mui/icons-material";
 import { useNavigate } from "react-router-dom";
 import { useDatasets } from "../api/datasets";
+import { useCreatePipelineRun } from "../api/pipeline";
 import MetricCard from "../components/MetricCard";
 import { useWorkspace } from "../components/WorkspaceContext";
 
 export default function DashboardPage() {
   const { data: datasets, isLoading } = useDatasets();
-  const { setDatasetId } = useWorkspace();
+  const { setDatasetId, setPipelineRunId } = useWorkspace();
+  const createPipelineRun = useCreatePipelineRun();
   const navigate = useNavigate();
+
+  const handleRunAgentPipeline = (datasetId: string) => {
+    createPipelineRun.mutate(
+      { dataset_id: datasetId },
+      {
+        onSuccess: (run) => {
+          setPipelineRunId(run.id);
+          navigate(`/pipeline-runs/${run.id}`);
+        },
+      },
+    );
+  };
 
   const latest = datasets?.[0];
 
@@ -58,15 +73,26 @@ export default function DashboardPage() {
                   <TableCell align="right">{d.n_columns}</TableCell>
                   <TableCell align="right">{d.data_quality_score}</TableCell>
                   <TableCell align="right">
-                    <Button
-                      size="small"
-                      onClick={() => {
-                        setDatasetId(d.id);
-                        navigate(`/datasets/${d.id}/quality`);
-                      }}
-                    >
-                      Open →
-                    </Button>
+                    <Stack direction="row" spacing={1} sx={{ justifyContent: "flex-end" }}>
+                      <Button
+                        size="small"
+                        onClick={() => {
+                          setDatasetId(d.id);
+                          navigate(`/datasets/${d.id}/quality`);
+                        }}
+                      >
+                        Open →
+                      </Button>
+                      <Button
+                        size="small"
+                        variant="outlined"
+                        startIcon={<SmartToy />}
+                        disabled={createPipelineRun.isPending}
+                        onClick={() => handleRunAgentPipeline(d.id)}
+                      >
+                        Run Agent Pipeline
+                      </Button>
+                    </Stack>
                   </TableCell>
                 </TableRow>
               ))}

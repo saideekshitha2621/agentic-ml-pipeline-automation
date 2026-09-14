@@ -23,6 +23,7 @@ import {
   HowToReg,
   BarChart,
   Description,
+  SmartToy,
 } from "@mui/icons-material";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useWorkspace } from "./WorkspaceContext";
@@ -32,7 +33,7 @@ const DRAWER_WIDTH = 260;
 export default function NavShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { datasetId, jobId } = useWorkspace();
+  const { datasetId, jobId, pipelineRunId } = useWorkspace();
 
   const navItems = [
     { label: "Dashboard", icon: <Dashboard />, path: "/" },
@@ -46,6 +47,11 @@ export default function NavShell({ children }: { children: ReactNode }) {
     { label: "HITL Approval", icon: <HowToReg />, path: jobId ? `/jobs/${jobId}/approval` : null },
     { label: "Visualizations", icon: <BarChart />, path: jobId ? `/jobs/${jobId}/visualization` : null },
     { label: "Reports", icon: <Description />, path: jobId ? `/jobs/${jobId}/reports` : null },
+    {
+      label: "Agent Pipeline Run",
+      icon: <SmartToy />,
+      path: pipelineRunId ? `/pipeline-runs/${pipelineRunId}` : null,
+    },
   ];
 
   return (

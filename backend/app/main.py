@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import CORS_ORIGINS
 from app.db.database import init_db
-from app.routers import approval, datasets, jobs, leaderboard, pca, preprocessing, reports, visualizations
+from app.routers import approval, datasets, jobs, leaderboard, pca, pipeline, preprocessing, reports, visualizations
 
 app = FastAPI(title="Unsupervised AutoML Platform", version="1.0.0")
 
@@ -33,6 +33,7 @@ app.include_router(leaderboard.router)
 app.include_router(approval.router)
 app.include_router(visualizations.router)
 app.include_router(reports.router)
+app.include_router(pipeline.router)
 
 
 @app.get("/api/v1/health")

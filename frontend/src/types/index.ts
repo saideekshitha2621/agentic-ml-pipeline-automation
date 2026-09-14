@@ -168,3 +168,85 @@ export interface ClusterInterpretation {
   summaries: Record<string, string>;
   suggested_names: Record<string, string>;
 }
+
+export type PipelineRunStatus =
+  | "profiling"
+  | "awaiting_problem_approval"
+  | "model_execution"
+  | "awaiting_recommendation_approval"
+  | "reporting"
+  | "completed"
+  | "failed";
+
+export interface PipelineRun {
+  id: string;
+  dataset_id: string;
+  declared_target: string | null;
+  status: PipelineRunStatus;
+  problem_type: string | null;
+  job_id: string | null;
+  created_at: string;
+  updated_at: string;
+  error_message: string | null;
+}
+
+export type AgentDecisionStatus = "proposed" | "approved" | "edited" | "rejected";
+
+export interface AgentDecision {
+  id: string;
+  pipeline_run_id: string;
+  agent_name: string;
+  stage: string;
+  decision_json: Record<string, unknown>;
+  confidence: number | null;
+  reasoning_text: string;
+  status: AgentDecisionStatus;
+  human_edits_json: Record<string, unknown> | null;
+  override_reason: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  created_at: string;
+}
+
+export interface RecommendationCandidate {
+  cluster_run_id: string;
+  algorithm: string;
+  params: Record<string, unknown>;
+  rank: number;
+  composite_score: number | null;
+  rationale: string;
+  strengths: string[];
+  weaknesses: string[];
+  cluster_size_breakdown: Record<string, number>;
+  why_not_chosen?: string;
+}
+
+export interface AgentRecommendation {
+  top_choice: RecommendationCandidate;
+  alternatives: RecommendationCandidate[];
+  confidence: "high" | "low";
+}
+
+export interface PipelineReport {
+  dataset_summary: { filename: string; n_rows: number; n_columns: number; data_quality_score: number };
+  analysis_summary: { problem_type: string | null; reasoning: string | null; confidence: number | null };
+  decisions_taken: { agent: string; stage: string; reasoning: string; status: string }[];
+  models_evaluated: {
+    algorithm: string;
+    rank: number | null;
+    silhouette_score: number | null;
+    davies_bouldin_score: number | null;
+    calinski_harabasz_score: number | null;
+    composite_score: number | null;
+  }[];
+  recommendation_details: AgentRecommendation | null;
+  human_decisions: {
+    stage: string;
+    agent: string;
+    status: string;
+    approved_by: string | null;
+    override_reason: string | null;
+    human_edits: Record<string, unknown> | null;
+  }[];
+  final_outcome: string;
+}

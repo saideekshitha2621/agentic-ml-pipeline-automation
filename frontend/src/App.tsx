@@ -15,6 +15,7 @@ import ComparisonPage from "./pages/ComparisonPage";
 import ApprovalPage from "./pages/ApprovalPage";
 import VisualizationPage from "./pages/VisualizationPage";
 import ReportsPage from "./pages/ReportsPage";
+import PipelineRunPage from "./pages/PipelineRunPage";
 
 const queryClient = new QueryClient();
 
@@ -38,6 +39,7 @@ export default function App() {
                 <Route path="/jobs/:jobId/approval" element={<ApprovalPage />} />
                 <Route path="/jobs/:jobId/visualization" element={<VisualizationPage />} />
                 <Route path="/jobs/:jobId/reports" element={<ReportsPage />} />
+                <Route path="/pipeline-runs/:pipelineRunId" element={<PipelineRunPage />} />
               </Routes>
             </NavShell>
           </BrowserRouter>
