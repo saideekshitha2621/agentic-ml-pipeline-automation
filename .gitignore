@@ -1,0 +1,14 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+
+backend/app/storage/
+backend/*.log
+
+node_modules/
+frontend/dist/
+frontend/.env.local
+
+out/
+*.egg-info/
