@@ -15,7 +15,7 @@ export default function UploadPage() {
     upload.mutate(file, {
       onSuccess: (dataset) => {
         setDatasetId(dataset.id);
-        navigate(`/datasets/${dataset.id}/quality`);
+        navigate(`/datasets/${dataset.id}/workflow`);
       },
     });
   };

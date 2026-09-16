@@ -6,6 +6,7 @@ import NavShell from "./components/NavShell";
 import { WorkspaceProvider } from "./components/WorkspaceContext";
 import DashboardPage from "./pages/DashboardPage";
 import UploadPage from "./pages/UploadPage";
+import WorkflowSelectionPage from "./pages/WorkflowSelectionPage";
 import DataQualityPage from "./pages/DataQualityPage";
 import PreprocessingReviewPage from "./pages/PreprocessingReviewPage";
 import PCAPage from "./pages/PCAPage";
@@ -30,6 +31,7 @@ export default function App() {
               <Routes>
                 <Route path="/" element={<DashboardPage />} />
                 <Route path="/upload" element={<UploadPage />} />
+                <Route path="/datasets/:datasetId/workflow" element={<WorkflowSelectionPage />} />
                 <Route path="/datasets/:datasetId/quality" element={<DataQualityPage />} />
                 <Route path="/datasets/:datasetId/preprocessing" element={<PreprocessingReviewPage />} />
                 <Route path="/datasets/:datasetId/pca" element={<PCAPage />} />

@@ -47,3 +47,15 @@ export function useUploadDataset() {
     },
   });
 }
+
+export function useDeleteDataset() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: async (id: string) => {
+      await apiClient.delete(`/api/v1/datasets/${id}`);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: datasetKeys.all });
+    },
+  });
+}

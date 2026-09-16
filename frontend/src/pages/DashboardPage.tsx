@@ -1,16 +1,43 @@
-import { Box, Button, Paper, Stack, Table, TableBody, TableCell, TableHead, TableRow, Typography } from "@mui/material";
-import { SmartToy } from "@mui/icons-material";
+import { useState } from "react";
+import {
+  Box,
+  Button,
+  Dialog,
+  DialogActions,
+  DialogContent,
+  DialogContentText,
+  DialogTitle,
+  Paper,
+  Stack,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
+  Typography,
+} from "@mui/material";
+import { Delete, SmartToy } from "@mui/icons-material";
 import { useNavigate } from "react-router-dom";
-import { useDatasets } from "../api/datasets";
+import { useDatasets, useDeleteDataset } from "../api/datasets";
 import { useCreatePipelineRun } from "../api/pipeline";
 import MetricCard from "../components/MetricCard";
 import { useWorkspace } from "../components/WorkspaceContext";
+import type { Dataset } from "../types";
 
 export default function DashboardPage() {
   const { data: datasets, isLoading } = useDatasets();
   const { setDatasetId, setPipelineRunId } = useWorkspace();
   const createPipelineRun = useCreatePipelineRun();
+  const deleteDataset = useDeleteDataset();
   const navigate = useNavigate();
+  const [datasetToDelete, setDatasetToDelete] = useState<Dataset | null>(null);
+
+  const handleConfirmDelete = () => {
+    if (!datasetToDelete) return;
+    deleteDataset.mutate(datasetToDelete.id, {
+      onSuccess: () => setDatasetToDelete(null),
+    });
+  };
 
   const handleRunAgentPipeline = (datasetId: string) => {
     createPipelineRun.mutate(
@@ -92,6 +119,14 @@ export default function DashboardPage() {
                       >
                         Run Agent Pipeline
                       </Button>
+                      <Button
+                        size="small"
+                        color="error"
+                        startIcon={<Delete />}
+                        onClick={() => setDatasetToDelete(d)}
+                      >
+                        Delete
+                      </Button>
                     </Stack>
                   </TableCell>
                 </TableRow>
@@ -100,6 +135,22 @@ export default function DashboardPage() {
           </Table>
         )}
       </Paper>
+
+      <Dialog open={!!datasetToDelete} onClose={() => setDatasetToDelete(null)}>
+        <DialogTitle>Delete Dataset</DialogTitle>
+        <DialogContent>
+          <DialogContentText>
+            Are you sure you want to delete "{datasetToDelete?.filename}"? This will also remove any
+            related preprocessing plans, jobs, and pipeline runs, and cannot be undone.
+          </DialogContentText>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDatasetToDelete(null)}>Cancel</Button>
+          <Button color="error" disabled={deleteDataset.isPending} onClick={handleConfirmDelete}>
+            Delete
+          </Button>
+        </DialogActions>
+      </Dialog>
     </Stack>
   );
 }

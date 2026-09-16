@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import uuid
+from pathlib import Path
 
 import pandas as pd
 from fastapi import APIRouter, Depends, HTTPException, UploadFile
@@ -8,7 +9,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import DATASETS_DIR
 from app.db.database import get_db
+from app.db.models import AgentDecision, Approval, ClusterInterpretation, ClusterRun
 from app.db.models import Dataset as DatasetORM
+from app.db.models import ExportArtifact, Job, PipelineRun, PreprocessingPlanORM
 from app.schemas.dataset import DataProfile, Dataset
 from app.services import profiling_service
 
@@ -67,3 +70,31 @@ def get_profile(dataset_id: str, db: Session = Depends(get_db)):
     if not dataset:
         raise HTTPException(404, "Dataset not found.")
     return dataset.profile_json
+
+
+@router.delete("/{dataset_id}", status_code=204, response_model=None)
+def delete_dataset(dataset_id: str, db: Session = Depends(get_db)):
+    dataset = db.get(DatasetORM, dataset_id)
+    if not dataset:
+        raise HTTPException(404, "Dataset not found.")
+
+    for job in db.query(Job).filter(Job.dataset_id == dataset_id).all():
+        db.query(ExportArtifact).filter(ExportArtifact.job_id == job.id).delete()
+        db.query(Approval).filter(Approval.job_id == job.id).delete()
+        for run in db.query(ClusterRun).filter(ClusterRun.job_id == job.id).all():
+            db.query(ClusterInterpretation).filter(
+                ClusterInterpretation.cluster_run_id == run.id
+            ).delete()
+            db.delete(run)
+        db.delete(job)
+
+    for pipeline_run in db.query(PipelineRun).filter(PipelineRun.dataset_id == dataset_id).all():
+        db.query(AgentDecision).filter(AgentDecision.pipeline_run_id == pipeline_run.id).delete()
+        db.delete(pipeline_run)
+
+    db.query(PreprocessingPlanORM).filter(PreprocessingPlanORM.dataset_id == dataset_id).delete()
+
+    db.delete(dataset)
+    db.commit()
+
+    Path(dataset.storage_path).unlink(missing_ok=True)
