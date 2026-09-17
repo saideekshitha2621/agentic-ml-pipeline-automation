@@ -11,8 +11,8 @@ from sqlalchemy.orm import Session
 from app.core.config import EXPORTS_DIR, JOBS_DIR
 from app.db.database import get_db
 from app.db.models import ClusterInterpretation as ClusterInterpretationORM
-from app.db.models import ClusterRun as ClusterRunORM
 from app.db.models import ExportArtifact, Job as JobORM
+from app.db.models import ModelRun as ModelRunORM
 from app.services import export_service
 from app.routers.visualizations import _resolve_run
 
@@ -59,7 +59,7 @@ def export_job(
         clustered_df["cluster"]
     )
 
-    all_runs = db.query(ClusterRunORM).filter_by(job_id=job_id).order_by(ClusterRunORM.rank.is_(None), ClusterRunORM.rank).all()
+    all_runs = db.query(ModelRunORM).filter_by(job_id=job_id).order_by(ModelRunORM.rank.is_(None), ModelRunORM.rank).all()
     leaderboard_df = pd.DataFrame(
         [
             {

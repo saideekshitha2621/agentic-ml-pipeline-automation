@@ -1,6 +1,6 @@
 """Agent-driven pipeline endpoints — additive and parallel to the existing manual
 datasets -> preprocessing -> jobs -> approval flow, which is untouched. A PipelineRun
-that confirms 'clustering' delegates to the same Job/ClusterRun machinery those routers
+that confirms 'clustering' delegates to the same Job/ModelRun machinery those routers
 already use, so GET /jobs/{id}, /leaderboard, /visualizations, /export all keep working
 unmodified on the job a pipeline run creates.
 """
@@ -106,12 +106,30 @@ def review_decision(
         db.commit()
         return decision
 
-    if decision.agent_name == "problem_detection":
-        background_tasks.add_task(orchestrator.advance_after_problem_approval, pipeline_run_id)
-    elif decision.agent_name == "recommendation":
-        background_tasks.add_task(orchestrator.finalize_after_recommendation_approval, pipeline_run_id)
+    _DISPATCH = {
+        "problem_detection": orchestrator.advance_after_problem_approval,
+        "data_validation": orchestrator.advance_after_validation_approval,
+        "cleaning_plan": orchestrator.advance_after_cleaning_approval,
+        "transformation": orchestrator.advance_after_transformation_approval,
+        "train_test_split": orchestrator.advance_after_split_approval,
+        "algorithm_recommendation": orchestrator.advance_after_algorithm_approval,
+        "recommendation": orchestrator.finalize_after_recommendation_approval,
+    }
+    next_step = _DISPATCH.get(decision.agent_name)
+    if next_step:
+        background_tasks.add_task(next_step, pipeline_run_id)
 
     return decision
+
+
+@router.get("/{pipeline_run_id}/training-progress")
+def training_progress(pipeline_run_id: str, db: Session = Depends(get_db)):
+    run = _get_run_or_404(pipeline_run_id, db)
+    if not run.job_id:
+        return {"algorithms": [], "job_status": None}
+    job = db.get(JobORM, run.job_id)
+    return {"algorithms": [{"algorithm": k, "status": v} for k, v in (job.training_status_json or {}).items()],
+            "job_status": job.status, "progress_pct": job.progress_pct}
 
 
 @router.get("/{pipeline_run_id}/recommendation")

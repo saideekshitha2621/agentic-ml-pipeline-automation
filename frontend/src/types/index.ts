@@ -172,11 +172,37 @@ export interface ClusterInterpretation {
 export type PipelineRunStatus =
   | "profiling"
   | "awaiting_problem_approval"
-  | "model_execution"
+  | "data_validation"
+  | "awaiting_validation_approval"
+  | "cleaning_plan"
+  | "awaiting_cleaning_approval"
+  | "transformation"
+  | "awaiting_transformation_approval"
+  | "train_test_split"
+  | "awaiting_split_approval"
+  | "algorithm_recommendation"
+  | "awaiting_algorithm_approval"
+  | "training"
+  | "hyperparameter_optimization"
+  | "evaluation"
   | "awaiting_recommendation_approval"
   | "reporting"
   | "completed"
   | "failed";
+
+export const PIPELINE_STAGES: { status: PipelineRunStatus; gate?: PipelineRunStatus; label: string; agentName: string }[] = [
+  { status: "profiling", label: "Dataset Understanding & Problem Detection", agentName: "problem_detection" },
+  { status: "data_validation", gate: "awaiting_validation_approval", label: "Data Validation", agentName: "data_validation" },
+  { status: "cleaning_plan", gate: "awaiting_cleaning_approval", label: "Data Cleaning Plan", agentName: "cleaning_plan" },
+  { status: "transformation", gate: "awaiting_transformation_approval", label: "Data Transformation", agentName: "transformation" },
+  { status: "train_test_split", gate: "awaiting_split_approval", label: "Train/Test Split", agentName: "train_test_split" },
+  { status: "algorithm_recommendation", gate: "awaiting_algorithm_approval", label: "Algorithm Recommendation", agentName: "algorithm_recommendation" },
+  { status: "training", label: "Training", agentName: "model_selection" },
+  { status: "hyperparameter_optimization", label: "Hyperparameter Optimization", agentName: "hyperparameter_optimization" },
+  { status: "evaluation", label: "Evaluation", agentName: "evaluation" },
+  { status: "awaiting_recommendation_approval", label: "Recommendation", agentName: "recommendation" },
+  { status: "reporting", label: "Final Report", agentName: "reporting" },
+];
 
 export interface PipelineRun {
   id: string;
@@ -188,6 +214,23 @@ export interface PipelineRun {
   created_at: string;
   updated_at: string;
   error_message: string | null;
+  champion_model_path: string | null;
+  feature_schema_json: Record<string, { type: "numeric" | "categorical"; min?: number; max?: number; options?: string[]; default: unknown }>;
+  feature_importance_json: { features?: { feature: string; importance: number; importance_pct: number }[]; target_classes?: string[] };
+}
+
+export interface ChatMessage {
+  id: string;
+  pipeline_run_id: string;
+  role: "user" | "assistant";
+  content: string;
+  created_at: string;
+}
+
+export interface TrainingProgress {
+  algorithms: { algorithm: string; status: "running" | "completed" | "failed" }[];
+  job_status: string | null;
+  progress_pct?: number;
 }
 
 export type AgentDecisionStatus = "proposed" | "approved" | "edited" | "rejected";

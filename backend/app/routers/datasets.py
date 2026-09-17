@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import DATASETS_DIR
 from app.db.database import get_db
-from app.db.models import AgentDecision, Approval, ClusterInterpretation, ClusterRun
+from app.db.models import AgentDecision, Approval, ClusterInterpretation, ModelRun
 from app.db.models import Dataset as DatasetORM
 from app.db.models import ExportArtifact, Job, PipelineRun, PreprocessingPlanORM
 from app.schemas.dataset import DataProfile, Dataset
@@ -81,7 +81,7 @@ def delete_dataset(dataset_id: str, db: Session = Depends(get_db)):
     for job in db.query(Job).filter(Job.dataset_id == dataset_id).all():
         db.query(ExportArtifact).filter(ExportArtifact.job_id == job.id).delete()
         db.query(Approval).filter(Approval.job_id == job.id).delete()
-        for run in db.query(ClusterRun).filter(ClusterRun.job_id == job.id).all():
+        for run in db.query(ModelRun).filter(ModelRun.job_id == job.id).all():
             db.query(ClusterInterpretation).filter(
                 ClusterInterpretation.cluster_run_id == run.id
             ).delete()

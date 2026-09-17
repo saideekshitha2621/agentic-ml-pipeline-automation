@@ -17,6 +17,7 @@ import ApprovalPage from "./pages/ApprovalPage";
 import VisualizationPage from "./pages/VisualizationPage";
 import ReportsPage from "./pages/ReportsPage";
 import PipelineRunPage from "./pages/PipelineRunPage";
+import PredictionPlaygroundPage from "./pages/PredictionPlaygroundPage";
 
 const queryClient = new QueryClient();
 
@@ -42,6 +43,7 @@ export default function App() {
                 <Route path="/jobs/:jobId/visualization" element={<VisualizationPage />} />
                 <Route path="/jobs/:jobId/reports" element={<ReportsPage />} />
                 <Route path="/pipeline-runs/:pipelineRunId" element={<PipelineRunPage />} />
+                <Route path="/pipeline-runs/:pipelineRunId/predict" element={<PredictionPlaygroundPage />} />
               </Routes>
             </NavShell>
           </BrowserRouter>

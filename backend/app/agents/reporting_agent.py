@@ -15,7 +15,6 @@ from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
 
 from app.db.models import AgentDecision as AgentDecisionORM
-from app.db.models import ClusterRun as ClusterRunORM
 from app.db.models import Dataset as DatasetORM
 from app.db.models import Job as JobORM
 from app.db.models import PipelineRun as PipelineRunORM
@@ -60,10 +59,8 @@ def build_report(
                 {
                     "algorithm": run.algorithm,
                     "rank": run.rank,
-                    "silhouette_score": run.silhouette_score,
-                    "davies_bouldin_score": run.davies_bouldin_score,
-                    "calinski_harabasz_score": run.calinski_harabasz_score,
                     "composite_score": run.composite_score,
+                    "metrics": run.metrics_json,
                 }
             )
 
@@ -122,9 +119,11 @@ def export_pdf(report: dict, out_path: Path) -> Path:
     section("Decisions Taken", decisions_text or "No decisions recorded.")
 
     if report["models_evaluated"]:
+        def _metrics_str(metrics: dict) -> str:
+            return ", ".join(f"{k}={v}" for k, v in (metrics or {}).items() if v is not None)
+
         models_text = "<br/>".join(
-            f"#{m['rank']} {m['algorithm']} — silhouette {m['silhouette_score']}, "
-            f"composite {m['composite_score']}"
+            f"#{m['rank']} {m['algorithm']} — {_metrics_str(m['metrics'])}, composite {m['composite_score']}"
             for m in report["models_evaluated"]
         )
         section("Models Evaluated", models_text)

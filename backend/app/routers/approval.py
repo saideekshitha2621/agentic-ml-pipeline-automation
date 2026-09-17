@@ -7,8 +7,8 @@ from sqlalchemy.orm import Session
 
 from app.db.database import get_db
 from app.db.models import Approval as ApprovalORM
-from app.db.models import ClusterRun as ClusterRunORM
 from app.db.models import Job as JobORM
+from app.db.models import ModelRun as ModelRunORM
 from app.schemas.approval import Approval, ApprovalRequest
 from app.schemas.leaderboard import Recommendation
 from app.services import ranking_service, recommendation_service
@@ -27,9 +27,9 @@ def _get_job_or_404(job_id: str, db: Session) -> JobORM:
 def get_recommendations(job_id: str, db: Session = Depends(get_db)):
     _get_job_or_404(job_id, db)
     top_runs = (
-        db.query(ClusterRunORM)
-        .filter(ClusterRunORM.job_id == job_id, ClusterRunORM.rank.isnot(None))
-        .order_by(ClusterRunORM.rank)
+        db.query(ModelRunORM)
+        .filter(ModelRunORM.job_id == job_id, ModelRunORM.rank.isnot(None))
+        .order_by(ModelRunORM.rank)
         .limit(3)
         .all()
     )
@@ -68,7 +68,7 @@ def get_recommendations(job_id: str, db: Session = Depends(get_db)):
 def approve_model(job_id: str, body: ApprovalRequest, db: Session = Depends(get_db)):
     _get_job_or_404(job_id, db)
 
-    run = db.get(ClusterRunORM, body.cluster_run_id)
+    run = db.get(ModelRunORM, body.cluster_run_id)
     if not run or run.job_id != job_id:
         raise HTTPException(404, "Cluster run not found for this job.")
 

@@ -21,7 +21,50 @@ def get_db():
         db.close()
 
 
+_SQLITE_COLUMN_TYPES = {
+    "VARCHAR": "VARCHAR",
+    "INTEGER": "INTEGER",
+    "FLOAT": "FLOAT",
+    "BOOLEAN": "BOOLEAN",
+    "JSON": "JSON",
+    "DATETIME": "DATETIME",
+    "TEXT": "TEXT",
+}
+
+
+def _ensure_columns():
+    """`Base.metadata.create_all` only creates missing tables, it never alters existing
+    ones — there's no Alembic in this project. Since model changes add columns to
+    already-created tables on a developer's local app.db, patch them in with a plain
+    `ALTER TABLE ... ADD COLUMN`, which SQLite supports for simple column additions."""
+    from sqlalchemy import inspect
+
+    inspector = inspect(engine)
+    with engine.begin() as conn:
+        for table in Base.metadata.sorted_tables:
+            if table.name not in inspector.get_table_names():
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table.name)}
+            for column in table.columns:
+                if column.name in existing:
+                    continue
+                col_type = _SQLITE_COLUMN_TYPES.get(column.type.__class__.__name__.upper(), "TEXT")
+                default_sql = ""
+                if column.default is not None and getattr(column.default, "is_scalar", False):
+                    val = column.default.arg
+                    if isinstance(val, bool):
+                        default_sql = f" DEFAULT {int(val)}"
+                    elif isinstance(val, (int, float)):
+                        default_sql = f" DEFAULT {val}"
+                    elif isinstance(val, str):
+                        default_sql = f" DEFAULT '{val}'"
+                conn.exec_driver_sql(
+                    f'ALTER TABLE "{table.name}" ADD COLUMN "{column.name}" {col_type}{default_sql}'
+                )
+
+
 def init_db():
     from app.db import models  # noqa: F401  (register models on Base.metadata)
 
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()

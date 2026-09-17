@@ -23,6 +23,27 @@ class PipelineRun(BaseModel):
     created_at: datetime
     updated_at: datetime
     error_message: str | None
+    champion_model_path: str | None = None
+    feature_schema_json: dict = {}
+    feature_importance_json: dict = {}
+
+
+class ChatMessage(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    pipeline_run_id: str
+    role: str
+    content: str
+    created_at: datetime
+
+
+class ChatRequest(BaseModel):
+    question: str
+
+
+class PredictionRequest(BaseModel):
+    features: dict
 
 
 class AgentDecision(BaseModel):

@@ -10,29 +10,29 @@ from app.core.config import JOBS_DIR
 from app.db.database import get_db
 from app.db.models import Approval as ApprovalORM
 from app.db.models import ClusterInterpretation as ClusterInterpretationORM
-from app.db.models import ClusterRun as ClusterRunORM
 from app.db.models import Job as JobORM
+from app.db.models import ModelRun as ModelRunORM
 from app.schemas.visualization import ClusterInterpretation, VisualizationBundle
 from app.services import explanation_service
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["visualizations"])
 
 
-def _resolve_run(job_id: str, run_id: str | None, db: Session) -> ClusterRunORM:
+def _resolve_run(job_id: str, run_id: str | None, db: Session) -> ModelRunORM:
     if run_id:
-        run = db.get(ClusterRunORM, run_id)
+        run = db.get(ModelRunORM, run_id)
         if not run or run.job_id != job_id:
             raise HTTPException(404, "Cluster run not found for this job.")
         return run
 
     approval = db.query(ApprovalORM).filter_by(job_id=job_id).first()
     if approval:
-        return db.get(ClusterRunORM, approval.cluster_run_id)
+        return db.get(ModelRunORM, approval.cluster_run_id)
 
     top = (
-        db.query(ClusterRunORM)
-        .filter(ClusterRunORM.job_id == job_id, ClusterRunORM.rank.isnot(None))
-        .order_by(ClusterRunORM.rank)
+        db.query(ModelRunORM)
+        .filter(ModelRunORM.job_id == job_id, ModelRunORM.rank.isnot(None))
+        .order_by(ModelRunORM.rank)
         .first()
     )
     if not top:
@@ -66,7 +66,7 @@ def get_visualizations(job_id: str, run_id: str | None = Query(default=None), db
         for u, c in zip(unique, counts)
     ]
 
-    all_runs = db.query(ClusterRunORM).filter_by(job_id=job_id).all()
+    all_runs = db.query(ModelRunORM).filter_by(job_id=job_id).all()
     metric_comparison = [
         {
             "run_id": r.id,

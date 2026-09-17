@@ -24,6 +24,7 @@ import {
   BarChart,
   Description,
   SmartToy,
+  Science,
 } from "@mui/icons-material";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useWorkspace } from "./WorkspaceContext";
@@ -51,6 +52,11 @@ export default function NavShell({ children }: { children: ReactNode }) {
       label: "Agent Pipeline Run",
       icon: <SmartToy />,
       path: pipelineRunId ? `/pipeline-runs/${pipelineRunId}` : null,
+    },
+    {
+      label: "Prediction Playground",
+      icon: <Science />,
+      path: pipelineRunId ? `/pipeline-runs/${pipelineRunId}/predict` : null,
     },
   ];
 

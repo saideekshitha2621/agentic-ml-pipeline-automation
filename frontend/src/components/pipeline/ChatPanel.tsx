@@ -1,0 +1,79 @@
+import { useState } from "react";
+import { Box, IconButton, Paper, Stack, TextField, Typography, Drawer, Fab, CircularProgress } from "@mui/material";
+import { Chat, Close, Send, SmartToy, Person } from "@mui/icons-material";
+import { useChatHistory, useSendChatMessage } from "../../api/chat";
+
+export default function ChatPanel({ pipelineRunId }: { pipelineRunId: string }) {
+  const [open, setOpen] = useState(false);
+  const [question, setQuestion] = useState("");
+  const { data: messages } = useChatHistory(open ? pipelineRunId : undefined);
+  const send = useSendChatMessage(pipelineRunId);
+
+  const submit = () => {
+    if (!question.trim()) return;
+    send.mutate(question.trim());
+    setQuestion("");
+  };
+
+  return (
+    <>
+      <Fab color="primary" onClick={() => setOpen(true)} sx={{ position: "fixed", bottom: 24, right: 24 }}>
+        <Chat />
+      </Fab>
+      <Drawer anchor="right" open={open} onClose={() => setOpen(false)}>
+        <Box sx={{ width: 420, display: "flex", flexDirection: "column", height: "100%" }}>
+          <Stack direction="row" sx={{ p: 2, alignItems: "center", justifyContent: "space-between", borderBottom: 1, borderColor: "divider" }}>
+            <Typography variant="h6">Ask about this pipeline</Typography>
+            <IconButton onClick={() => setOpen(false)}>
+              <Close />
+            </IconButton>
+          </Stack>
+          <Box sx={{ flexGrow: 1, overflowY: "auto", p: 2 }}>
+            <Stack spacing={1.5}>
+              {(!messages || messages.length === 0) && (
+                <Typography color="text.secondary" variant="body2">
+                  Ask about the dataset, preprocessing decisions, models, or predictions from this run.
+                </Typography>
+              )}
+              {messages?.map((m) => (
+                <Paper
+                  key={m.id}
+                  variant="outlined"
+                  sx={{
+                    p: 1.5,
+                    alignSelf: m.role === "user" ? "flex-end" : "flex-start",
+                    bgcolor: m.role === "user" ? "primary.main" : "background.paper",
+                    color: m.role === "user" ? "primary.contrastText" : "text.primary",
+                    maxWidth: "85%",
+                  }}
+                >
+                  <Stack direction="row" spacing={0.5} sx={{ alignItems: "center", mb: 0.5 }}>
+                    {m.role === "user" ? <Person fontSize="small" /> : <SmartToy fontSize="small" />}
+                    <Typography variant="caption">{m.role === "user" ? "You" : "Assistant"}</Typography>
+                  </Stack>
+                  <Typography variant="body2" sx={{ whiteSpace: "pre-wrap" }}>
+                    {m.content}
+                  </Typography>
+                </Paper>
+              ))}
+              {send.isPending && <CircularProgress size={20} />}
+            </Stack>
+          </Box>
+          <Stack direction="row" spacing={1} sx={{ p: 2, borderTop: 1, borderColor: "divider" }}>
+            <TextField
+              fullWidth
+              size="small"
+              placeholder="Ask a question..."
+              value={question}
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && submit()}
+            />
+            <IconButton color="primary" onClick={submit} disabled={send.isPending || !question.trim()}>
+              <Send />
+            </IconButton>
+          </Stack>
+        </Box>
+      </Drawer>
+    </>
+  );
+}

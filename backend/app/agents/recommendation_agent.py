@@ -11,33 +11,41 @@ import numpy as np
 import pandas as pd
 from sqlalchemy.orm import Session
 
-from app.db.models import ClusterRun as ClusterRunORM
 from app.db.models import Job as JobORM
+from app.db.models import ModelRun as ModelRunORM
 from app.services import ranking_service, recommendation_service
 
 NEAR_TIE_COMPOSITE_DELTA = 0.05
 
 
-def _run_dict(run: ClusterRunORM) -> dict:
-    return {
+def _run_dict(run: ModelRunORM) -> dict:
+    base = {
         "algorithm": run.algorithm,
         "params": run.params_json,
-        "n_clusters": run.n_clusters,
-        "n_noise": run.n_noise,
-        "noise_pct": run.noise_pct,
-        "silhouette_score": run.silhouette_score,
-        "davies_bouldin_score": run.davies_bouldin_score,
-        "calinski_harabasz_score": run.calinski_harabasz_score,
         "composite_score": run.composite_score,
         "rank": run.rank,
     }
+    if run.problem_type == "clustering":
+        base.update(
+            {
+                "n_clusters": run.n_clusters,
+                "n_noise": run.n_noise,
+                "noise_pct": run.noise_pct,
+                "silhouette_score": run.silhouette_score,
+                "davies_bouldin_score": run.davies_bouldin_score,
+                "calinski_harabasz_score": run.calinski_harabasz_score,
+            }
+        )
+    else:
+        base.update(run.metrics_json or {})
+    return base
 
 
 def build_recommendation(job: JobORM, db: Session) -> dict:
     top_runs = (
-        db.query(ClusterRunORM)
-        .filter(ClusterRunORM.job_id == job.id, ClusterRunORM.rank.isnot(None))
-        .order_by(ClusterRunORM.rank)
+        db.query(ModelRunORM)
+        .filter(ModelRunORM.job_id == job.id, ModelRunORM.rank.isnot(None))
+        .order_by(ModelRunORM.rank)
         .limit(3)
         .all()
     )
@@ -47,9 +55,20 @@ def build_recommendation(job: JobORM, db: Session) -> dict:
     entries = []
     for run in top_runs:
         run_dict = _run_dict(run)
-        strengths, weaknesses = recommendation_service.strengths_and_weaknesses(run_dict)
-        rationale = ranking_service.rationale_for(pd.Series({**run_dict, "run_id": run.id}))
-        labels = np.load(run.labels_path)
+        strengths, weaknesses = recommendation_service.strengths_and_weaknesses(
+            run_dict, problem_type=run.problem_type
+        )
+        rationale = ranking_service.rationale_for(
+            pd.Series({**run_dict, "run_id": run.id}), problem_type=run.problem_type
+        )
+        # labels_path holds cluster labels for clustering runs, predicted classes for
+        # classification runs — either way, "the per-row output array this run produced".
+        outputs = np.load(run.labels_path)
+        breakdown = (
+            recommendation_service.cluster_size_breakdown(outputs)
+            if run.problem_type == "clustering"
+            else recommendation_service.prediction_class_breakdown(outputs)
+        )
         entries.append(
             {
                 "cluster_run_id": run.id,
@@ -60,7 +79,7 @@ def build_recommendation(job: JobORM, db: Session) -> dict:
                 "rationale": rationale,
                 "strengths": strengths,
                 "weaknesses": weaknesses,
-                "cluster_size_breakdown": recommendation_service.cluster_size_breakdown(labels),
+                "cluster_size_breakdown": breakdown,
             }
         )
 

@@ -4,7 +4,50 @@ from __future__ import annotations
 import numpy as np
 
 
-def strengths_and_weaknesses(run: dict) -> tuple[list[str], list[str]]:
+def strengths_and_weaknesses(run: dict, problem_type: str = "clustering") -> tuple[list[str], list[str]]:
+    if problem_type == "classification":
+        return _classification_strengths_and_weaknesses(run)
+    return _clustering_strengths_and_weaknesses(run)
+
+
+def _classification_strengths_and_weaknesses(run: dict) -> tuple[list[str], list[str]]:
+    strengths, weaknesses = [], []
+    metrics = run.get("metrics", run)  # accept either a flat run_dict or {"metrics": {...}}
+    acc = metrics.get("accuracy")
+    f1 = metrics.get("f1_macro")
+    roc = metrics.get("roc_auc")
+
+    if f1 is not None:
+        if f1 > 0.85:
+            strengths.append(f"Strong, balanced performance across classes (F1 {f1:.3f}).")
+        elif f1 < 0.5:
+            weaknesses.append(f"Weak, imbalanced performance across classes (F1 {f1:.3f}).")
+
+    if acc is not None:
+        if acc > 0.8:
+            strengths.append(f"{acc:.1%} accuracy on the held-out test set.")
+        elif acc < 0.6:
+            weaknesses.append(f"Only {acc:.1%} accuracy on the held-out test set.")
+
+    if roc is not None:
+        if roc > 0.85:
+            strengths.append(f"Strong class separability (ROC-AUC {roc:.3f}).")
+        elif roc < 0.6:
+            weaknesses.append(f"Poor class separability (ROC-AUC {roc:.3f}).")
+    else:
+        weaknesses.append("ROC-AUC unavailable — the test split didn't cover every class.")
+
+    if not strengths:
+        strengths.append("Completed successfully with valid predictions on the held-out test set.")
+    return strengths, weaknesses
+
+
+def prediction_class_breakdown(y_pred: np.ndarray) -> dict[str, int]:
+    unique, counts = np.unique(y_pred, return_counts=True)
+    return {str(u): int(c) for u, c in zip(unique, counts)}
+
+
+def _clustering_strengths_and_weaknesses(run: dict) -> tuple[list[str], list[str]]:
     strengths, weaknesses = [], []
     sil = run.get("silhouette_score")
     db = run.get("davies_bouldin_score")
