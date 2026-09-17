@@ -64,7 +64,7 @@ def ask_chat(pipeline_run_id: str, body: ChatRequest, db: Session = Depends(get_
     db.commit()
 
     context = _build_grounding_context(run, dataset, decisions)
-    answer = llm_service.chat(body.question, context, history)
+    answer = llm_service.chat(body.question, context, history, db=db)
 
     assistant_message = ChatMessageORM(pipeline_run_id=pipeline_run_id, role="assistant", content=answer)
     db.add(assistant_message)

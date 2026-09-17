@@ -11,7 +11,7 @@ from app.db.database import get_db
 from app.db.models import PipelineRun as PipelineRunORM
 from app.db.models import PredictionLog as PredictionLogORM
 from app.schemas.pipeline import PredictionRequest
-from app.services import champion_service, explainability_service
+from app.services import business_language_service, champion_service, explainability_service
 
 router = APIRouter(prefix="/api/v1/pipeline-runs", tags=["prediction"])
 
@@ -53,9 +53,12 @@ def predict(pipeline_run_id: str, body: PredictionRequest, db: Session = Depends
     # current input scaled against itself as a same-shape stand-in for the SHAP background
     # distribution; explain_prediction() falls back gracefully if this degrades the explainer.
     explanation = explainability_service.explain_prediction(
-        pipeline.estimator, np.tile(x_row, (10, 1)), x_row, pipeline.encoded_columns
+        pipeline.estimator, np.tile(x_row, (10, 1)), x_row, pipeline.encoded_columns, db=db
     )
     result["explanation"] = explanation
+    result["suggested_business_action"] = business_language_service.business_action_for_prediction(
+        result.get("confidence")
+    )
 
     db.add(PredictionLogORM(pipeline_run_id=pipeline_run_id, input_json=body.features, output_json=result))
     db.commit()

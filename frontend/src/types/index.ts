@@ -261,7 +261,22 @@ export interface RecommendationCandidate {
   strengths: string[];
   weaknesses: string[];
   cluster_size_breakdown: Record<string, number>;
+  business_benefits?: string[];
   why_not_chosen?: string;
+}
+
+export interface ExecutiveSummary {
+  business_problem: {
+    statement: string;
+    prediction_objective: string;
+    key_features: string[];
+    business_value: string;
+  } | null;
+  dataset_overview: { n_rows: number; n_columns: number; quality_summary: string } | null;
+  ml_type: string | null;
+  target_variable: string | null;
+  recommended_model: { algorithm: string; rationale: string; business_benefits: string[] } | null;
+  performance_summary: { headline_metric_sentence: string | null; confidence: string | null } | null;
 }
 
 export interface AgentRecommendation {
@@ -292,4 +307,26 @@ export interface PipelineReport {
     human_edits: Record<string, unknown> | null;
   }[];
   final_outcome: string;
+  executive_summary?: {
+    business_problem: string | null;
+    dataset_overview: string;
+    ml_type: string | null;
+    target_variable: string | null;
+    recommended_model: string | null;
+    performance_summary: string | null;
+  };
+  problem_statement?: string | null;
+  data_quality_findings?: string;
+  actions_taken?: string[];
+  model_recommendation?: { algorithm: string; rationale: string; business_benefits: string[] } | null;
+  performance_summary?: Record<string, string>;
+  predictions?: {
+    input: Record<string, unknown>;
+    prediction: string | number;
+    confidence: string;
+    suggested_business_action: string | null;
+    created_at: string;
+  }[];
+  business_insights?: string[];
+  recommendations?: string[];
 }

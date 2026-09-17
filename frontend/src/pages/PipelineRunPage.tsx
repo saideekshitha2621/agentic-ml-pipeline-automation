@@ -22,6 +22,7 @@ import {
 import { CheckCircle, Edit, HourglassEmpty, Cancel, SmartToy, Science } from "@mui/icons-material";
 import {
   pipelineReportExportUrl,
+  useExecutiveSummary,
   usePipelineDecisions,
   usePipelineReport,
   usePipelineRun,
@@ -42,6 +43,7 @@ import {
   ValidationContent,
 } from "../components/pipeline/StageContent";
 import ChatPanel from "../components/pipeline/ChatPanel";
+import ExecutiveSummaryCard from "../components/pipeline/ExecutiveSummaryCard";
 
 const STATUS_COLOR: Record<string, "default" | "success" | "warning" | "error" | "info"> = {
   proposed: "warning",
@@ -212,6 +214,7 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
 
       <Box sx={{ mb: 2 }}>
         <StageSummary decision={decision} />
+        <BusinessImpactNote decision={decision} />
       </Box>
 
       <TextField
@@ -310,6 +313,16 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
   );
 }
 
+function BusinessImpactNote({ decision }: { decision: AgentDecision }) {
+  const impact = decision.decision_json.business_impact as string | undefined;
+  if (!impact) return null;
+  return (
+    <Typography variant="body2" color="text.secondary" sx={{ mt: 1, fontStyle: "italic" }}>
+      Why this matters: {impact}
+    </Typography>
+  );
+}
+
 function stageIndex(status: PipelineRunStatus): number {
   const idx = PIPELINE_STAGES.findIndex((s) => s.status === status || s.gate === status);
   return idx === -1 ? PIPELINE_STAGES.length : idx;
@@ -322,6 +335,7 @@ export default function PipelineRunPage() {
   const { data: decisions, isLoading } = usePipelineDecisions(pipelineRunId);
   const { data: report } = usePipelineReport(pipelineRunId, run?.status === "completed");
   const { data: trainingProgress } = useTrainingProgress(pipelineRunId, run?.status === "training");
+  const { data: executiveSummary } = useExecutiveSummary(pipelineRunId);
 
   if (isLoading || !run) return <LinearProgress />;
 
@@ -348,6 +362,8 @@ export default function PipelineRunPage() {
         </Stack>
       </Box>
 
+      <ExecutiveSummaryCard summary={executiveSummary} />
+
       {run.status === "failed" && <Alert severity="error">{run.error_message}</Alert>}
 
       <Stepper activeStep={activeIndex} orientation="vertical">
@@ -365,7 +381,12 @@ export default function PipelineRunPage() {
                 {decision && decision.status === "proposed" ? (
                   <DecisionReviewCard decision={decision} pipelineRunId={run.id} />
                 ) : (
-                  decision && <StageSummary decision={decision} />
+                  decision && (
+                    <>
+                      <StageSummary decision={decision} />
+                      <BusinessImpactNote decision={decision} />
+                    </>
+                  )
                 )}
               </Box>
             </Step>
@@ -417,21 +438,78 @@ export default function PipelineRunPage() {
 
       {run.status === "completed" && report && (
         <Paper variant="outlined" sx={{ p: 3 }}>
-          <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center" }}>
-            <Typography variant="h6">Final Report</Typography>
+          <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 2 }}>
+            <Typography variant="h6">Business Report</Typography>
             <Button variant="contained" href={pipelineReportExportUrl(run.id)} target="_blank" rel="noreferrer">
               Download PDF
             </Button>
           </Stack>
-          <Typography sx={{ mt: 2 }}>
-            <b>Problem type:</b> {report.analysis_summary.problem_type}
-          </Typography>
-          {report.recommendation_details && (
-            <Typography sx={{ mt: 1 }}>
-              <b>Recommended model:</b> {report.recommendation_details.top_choice.algorithm} —{" "}
-              {report.recommendation_details.top_choice.rationale}
-            </Typography>
-          )}
+          <Stack spacing={2.5}>
+            <Box>
+              <Typography variant="subtitle1">Executive Summary</Typography>
+              <Typography variant="body2"><b>Business problem:</b> {report.executive_summary?.business_problem ?? "—"}</Typography>
+              <Typography variant="body2"><b>Dataset:</b> {report.executive_summary?.dataset_overview}</Typography>
+              <Typography variant="body2"><b>ML type:</b> {report.executive_summary?.ml_type ?? "Pending"}</Typography>
+              <Typography variant="body2"><b>Target variable:</b> {report.executive_summary?.target_variable ?? "None (unsupervised)"}</Typography>
+              <Typography variant="body2"><b>Recommended model:</b> {report.executive_summary?.recommended_model ?? "Pending"}</Typography>
+              <Typography variant="body2"><b>Performance:</b> {report.executive_summary?.performance_summary ?? "Pending"}</Typography>
+            </Box>
+            <Box>
+              <Typography variant="subtitle1">Problem Statement</Typography>
+              <Typography variant="body2">{report.problem_statement}</Typography>
+            </Box>
+            <Box>
+              <Typography variant="subtitle1">Data Quality Findings</Typography>
+              <Typography variant="body2">{report.data_quality_findings}</Typography>
+            </Box>
+            <Box>
+              <Typography variant="subtitle1">Actions Taken</Typography>
+              <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
+                {report.actions_taken?.map((a, i) => <Typography key={i} component="li" variant="body2">{a}</Typography>)}
+              </Stack>
+            </Box>
+            {report.model_recommendation && (
+              <Box>
+                <Typography variant="subtitle1">Model Recommendation</Typography>
+                <Typography variant="body2">
+                  <b>{report.model_recommendation.algorithm.replace(/_/g, " ")}</b> — {report.model_recommendation.rationale}
+                </Typography>
+              </Box>
+            )}
+            {report.performance_summary && Object.keys(report.performance_summary).length > 0 && (
+              <Box>
+                <Typography variant="subtitle1">Performance Summary</Typography>
+                <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
+                  {Object.values(report.performance_summary).map((s, i) => <Typography key={i} component="li" variant="body2">{s}</Typography>)}
+                </Stack>
+              </Box>
+            )}
+            {report.predictions && report.predictions.length > 0 && (
+              <Box>
+                <Typography variant="subtitle1">Predictions</Typography>
+                <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
+                  {report.predictions.map((p, i) => (
+                    <Typography key={i} component="li" variant="body2">
+                      {JSON.stringify(p.input)} → <b>{String(p.prediction)}</b> ({p.confidence})
+                      {p.suggested_business_action ? ` — ${p.suggested_business_action}` : ""}
+                    </Typography>
+                  ))}
+                </Stack>
+              </Box>
+            )}
+            <Box>
+              <Typography variant="subtitle1">Business Insights</Typography>
+              <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
+                {report.business_insights?.map((s, i) => <Typography key={i} component="li" variant="body2">{s}</Typography>)}
+              </Stack>
+            </Box>
+            <Box>
+              <Typography variant="subtitle1">Recommendations</Typography>
+              <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
+                {report.recommendations?.map((s, i) => <Typography key={i} component="li" variant="body2">{s}</Typography>)}
+              </Stack>
+            </Box>
+          </Stack>
         </Paper>
       )}
 

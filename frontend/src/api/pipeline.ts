@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient } from "./client";
-import type { AgentDecision, AgentRecommendation, PipelineReport, PipelineRun, TrainingProgress } from "../types";
+import type { AgentDecision, AgentRecommendation, ExecutiveSummary, PipelineReport, PipelineRun, TrainingProgress } from "../types";
 
 const RUNNING_STATUSES = new Set([
   "profiling",
@@ -87,6 +87,16 @@ export function usePipelineReport(pipelineRunId: string | undefined, enabled: bo
 
 export function pipelineReportExportUrl(pipelineRunId: string): string {
   return `${apiClient.defaults.baseURL}/api/v1/pipeline-runs/${pipelineRunId}/report/export?format=pdf`;
+}
+
+export function useExecutiveSummary(pipelineRunId: string | undefined) {
+  return useQuery({
+    queryKey: ["pipeline-run", pipelineRunId, "executive-summary"],
+    queryFn: async () =>
+      (await apiClient.get<ExecutiveSummary>(`/api/v1/pipeline-runs/${pipelineRunId}/executive-summary`)).data,
+    enabled: !!pipelineRunId,
+    refetchInterval: 3000,
+  });
 }
 
 export function useTrainingProgress(pipelineRunId: string | undefined, enabled: boolean) {

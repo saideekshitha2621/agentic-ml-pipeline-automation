@@ -33,7 +33,9 @@ from app.db.models import PipelineRun as PipelineRunORM
 from app.db.models import PreprocessingPlanORM
 from app.services import (
     agent_decision_service,
+    business_language_service,
     champion_service,
+    error_translation_service,
     evaluation_service,
     hpo_service,
     job_runner_service,
@@ -42,6 +44,7 @@ from app.services import (
 )
 from app.agents import (
     algorithm_shortlist_agent,
+    business_framing_agent,
     cleaning_plan_agent,
     data_profiling_agent,
     data_validation_agent,
@@ -59,12 +62,23 @@ def _proposal(decision) -> dict:
     return decision.human_edits_json if decision.status == "edited" else decision.decision_json
 
 
+def _decide(db, run, *, agent_name: str, stage: str, decision: dict, confidence, reasoning: str, auto_approve: bool = False):
+    """Every AgentDecision in this pipeline passes through here so each one carries a
+    `business_impact` sentence (requirement: explain what/why/business impact per stage)
+    without every individual agent module needing to know about business framing."""
+    decision = {**decision, "business_impact": business_language_service.business_impact_for_stage(stage, decision)}
+    return agent_decision_service.record_decision(
+        db, run, agent_name=agent_name, stage=stage, decision=decision,
+        confidence=confidence, reasoning=reasoning, auto_approve=auto_approve,
+    )
+
+
 def _fail(db, pipeline_run_id: str, exc: Exception) -> None:
     db.rollback()
     run = db.get(PipelineRunORM, pipeline_run_id)
     if run:
         run.status = "failed"
-        run.error_message = str(exc)
+        run.error_message = error_translation_service.to_business_message(exc)
         db.commit()
 
 
@@ -79,14 +93,14 @@ def start(pipeline_run_id: str) -> None:
         df = pd.read_csv(dataset.storage_path)
 
         profile = data_profiling_agent.analyze(df, dataset.profile_json)
-        agent_decision_service.record_decision(
+        _decide(
             db, run, agent_name="data_profiling", stage="profiling",
             decision={"column_roles": profile["column_roles"], "dataset_understanding": profile["dataset_understanding"]},
             confidence=1.0, reasoning=data_profiling_agent.summarize(profile), auto_approve=True,
         )
 
         result = problem_detection_agent.detect(df, profile, declared_target=run.declared_target)
-        agent_decision_service.record_decision(
+        _decide(
             db, run, agent_name="problem_detection", stage="problem_detection", decision=result,
             confidence=result["confidence"], reasoning=" ".join(result["reasoning"]), auto_approve=False,
         )
@@ -100,7 +114,7 @@ def start(pipeline_run_id: str) -> None:
 
 
 def advance_after_problem_approval(pipeline_run_id: str) -> None:
-    """Stage 3: Data Validation Agent, then pause for HITL 2."""
+    """Stage 3: Business Framing Agent -> Data Validation Agent, then pause for HITL 2."""
     db = SessionLocal()
     try:
         run = db.get(PipelineRunORM, pipeline_run_id)
@@ -126,11 +140,37 @@ def advance_after_problem_approval(pipeline_run_id: str) -> None:
         df = pd.read_csv(dataset.storage_path)
         profile = data_profiling_agent.analyze(df, dataset.profile_json)
 
-        validation = data_validation_agent.validate(df, profile, target_column=run.declared_target)
-        agent_decision_service.record_decision(
+        framing = business_framing_agent.frame(
+            dataset.filename, dataset.n_rows, problem_type, run.declared_target,
+            column_roles=profile.get("column_roles"), db=db,
+        )
+        _decide(
+            db, run, agent_name="business_framing", stage="business_framing", decision=framing,
+            confidence=1.0, reasoning=business_framing_agent.summarize(framing), auto_approve=True,
+        )
+
+        validation = data_validation_agent.validate(
+            df, profile, target_column=run.declared_target, problem_type=run.problem_type
+        )
+        _decide(
             db, run, agent_name="data_validation", stage="data_validation", decision=validation,
             confidence=1.0, reasoning=data_validation_agent.summarize(validation), auto_approve=False,
         )
+
+        # "Dataset size" and "Target column validity" are hard blockers — there is no
+        # cleaning action that fixes an empty dataset or a missing/invalid target, so the
+        # run stops here with a business-friendly message instead of waiting on a HITL
+        # approval that could only ever end in a downstream crash.
+        blocking = [
+            c for c in validation["checks"]
+            if c["name"] in ("Dataset size", "Target column validity") and c["status"] == "critical"
+        ]
+        if blocking:
+            run.status = "failed"
+            run.error_message = " ".join(c["detail"] for c in blocking)
+            db.commit()
+            return
+
         run.status = "awaiting_validation_approval"
         db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -154,7 +194,7 @@ def advance_after_validation_approval(pipeline_run_id: str) -> None:
         validation_result = _proposal(validation_decision)
 
         plan = cleaning_plan_agent.propose(df, validation_result, target_column=run.declared_target)
-        agent_decision_service.record_decision(
+        _decide(
             db, run, agent_name="cleaning_plan", stage="cleaning_plan", decision=plan,
             confidence=0.75, reasoning=cleaning_plan_agent.summarize(plan), auto_approve=False,
         )
@@ -182,7 +222,7 @@ def advance_after_cleaning_approval(pipeline_run_id: str) -> None:
         plan_fields = cleaning_plan_agent.to_preprocessing_plan_fields(cleaning_plan)
 
         transformation = transformation_agent.propose(df, plan_fields)
-        agent_decision_service.record_decision(
+        _decide(
             db, run, agent_name="transformation", stage="transformation", decision=transformation,
             confidence=0.8, reasoning=transformation_agent.summarize(transformation), auto_approve=False,
         )
@@ -209,7 +249,7 @@ def advance_after_transformation_approval(pipeline_run_id: str) -> None:
 
         split = split_agent.recommend(df, run.problem_type, target_column=run.declared_target)
         applicable = run.problem_type == "classification"
-        agent_decision_service.record_decision(
+        _decide(
             db, run, agent_name="train_test_split", stage="train_test_split", decision=split,
             confidence=0.8 if applicable else 1.0, reasoning=split_agent.summarize(split),
             auto_approve=not applicable,
@@ -248,7 +288,7 @@ def _advance_to_algorithm_shortlist(db, run: PipelineRunORM) -> None:
     profile = data_profiling_agent.analyze(df, dataset.profile_json)
 
     shortlist = algorithm_shortlist_agent.recommend(profile, run.problem_type)
-    agent_decision_service.record_decision(
+    _decide(
         db, run, agent_name="algorithm_recommendation", stage="algorithm_recommendation", decision=shortlist,
         confidence=0.7, reasoning=algorithm_shortlist_agent.summarize(shortlist), auto_approve=False,
     )
@@ -311,7 +351,7 @@ def advance_after_algorithm_approval(pipeline_run_id: str) -> None:
             db.commit()
             return
 
-        agent_decision_service.record_decision(
+        _decide(
             db, run, agent_name="model_selection", stage="training",
             decision={"algorithms_run": sorted({r.algorithm for r in job.runs})},
             confidence=1.0, reasoning=f"Ran all {len(job.runs)} shortlisted {run.problem_type} plugin candidate(s).",
@@ -330,7 +370,7 @@ def advance_after_algorithm_approval(pipeline_run_id: str) -> None:
 
         recommendation = recommendation_agent.build_recommendation(job, db)
         top = recommendation["top_choice"]
-        agent_decision_service.record_decision(
+        _decide(
             db, run, agent_name="recommendation", stage="recommendation", decision=recommendation,
             confidence=0.85 if recommendation["confidence"] == "high" else 0.5,
             reasoning=f"Recommending {top['algorithm']} (rank #{top['rank']}): {top['rationale']}",
@@ -370,10 +410,17 @@ def _run_hpo(db, run: PipelineRunORM, job: JobORM, plan_fields: dict) -> None:
         f"optimized f1={r.get('optimized_metrics', {}).get('f1_macro')} ({r.get('n_trials', 0)} trial(s))"
         for r in results if not r.get("skipped")
     ) or "No algorithms had a registered search space."
-    agent_decision_service.record_decision(
+    _decide(
         db, run, agent_name="hyperparameter_optimization", stage="hyperparameter_optimization",
         decision={"results": results}, confidence=1.0, reasoning=reasoning, auto_approve=True,
     )
+
+
+_CLUSTERING_METRIC_ALIASES = {
+    "silhouette": "silhouette_score",
+    "davies_bouldin": "davies_bouldin_score",
+    "calinski_harabasz": "calinski_harabasz_score",
+}
 
 
 def _record_evaluation_summary(db, run: PipelineRunORM, job: JobORM) -> None:
@@ -381,10 +428,22 @@ def _record_evaluation_summary(db, run: PipelineRunORM, job: JobORM) -> None:
     if best is None:
         best = job.runs[0] if job.runs else None
     metrics = best.metrics_json if best else {}
-    glossary = metric_glossary.explain(run.problem_type, metrics)
-    agent_decision_service.record_decision(
+    # ModelRun.metrics_json for clustering uses short keys (silhouette, davies_bouldin,
+    # calinski_harabasz) while the glossary/business-language lookups key off the same
+    # names ModelRun's typed columns use (*_score) — translate for those two lookups only,
+    # `metrics` itself stays as-is since other readers (e.g. the frontend) expect the short keys.
+    lookup_metrics = {_CLUSTERING_METRIC_ALIASES.get(k, k): v for k, v in metrics.items()}
+    glossary = metric_glossary.explain(run.problem_type, lookup_metrics)
+    business_metrics = {
+        k: s for k, v in lookup_metrics.items()
+        if v is not None and (s := business_language_service.metric_sentence(k, v, run.problem_type))
+    }
+    _decide(
         db, run, agent_name="evaluation", stage="evaluation",
-        decision={"champion_algorithm": best.algorithm if best else None, "metrics": metrics, "glossary": glossary},
+        decision={
+            "champion_algorithm": best.algorithm if best else None, "metrics": metrics, "glossary": glossary,
+            "business_metrics": business_metrics,
+        },
         confidence=1.0,
         reasoning=f"Top-ranked model so far: {best.algorithm if best else 'none'}. Metrics: {metrics}.",
         auto_approve=True,
@@ -432,7 +491,7 @@ def finalize_after_recommendation_approval(pipeline_run_id: str) -> None:
 
         run.status = "completed"  # set before building the report so final_outcome reflects it
         report = reporting_agent.build_report(run, decisions, dataset, job)
-        agent_decision_service.record_decision(
+        _decide(
             db, run, agent_name="reporting", stage="reporting", decision={"report": report},
             confidence=1.0, reasoning="Compiled the full agent decision trail into a business-readable report.",
             auto_approve=True,

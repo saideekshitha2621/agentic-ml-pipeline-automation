@@ -16,6 +16,7 @@ from app.routers import (
     prediction,
     preprocessing,
     reports,
+    settings,
     visualizations,
 )
 
@@ -48,6 +49,7 @@ app.include_router(reports.router)
 app.include_router(pipeline.router)
 app.include_router(prediction.router)
 app.include_router(chat.router)
+app.include_router(settings.router)
 
 
 @app.get("/api/v1/health")

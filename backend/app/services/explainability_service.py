@@ -14,6 +14,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 from sklearn.inspection import permutation_importance
+from sqlalchemy.orm import Session
 
 from app.services import llm_service
 
@@ -42,7 +43,9 @@ def global_feature_importance(model, X: np.ndarray, y: np.ndarray, feature_names
     return ranked
 
 
-def explain_prediction(model, X_train: np.ndarray, x_row: np.ndarray, feature_names: list[str], top_n: int = 3) -> dict:
+def explain_prediction(
+    model, X_train: np.ndarray, x_row: np.ndarray, feature_names: list[str], top_n: int = 3, db: Session | None = None
+) -> dict:
     contributions = None
     try:
         import shap
@@ -77,5 +80,6 @@ def explain_prediction(model, X_train: np.ndarray, x_row: np.ndarray, feature_na
         "prediction_explanation",
         {"top_features": ranked},
         fallback=template,
+        db=db,
     )
     return {"top_features": ranked, "narrative": narrative}

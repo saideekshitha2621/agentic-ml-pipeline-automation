@@ -15,6 +15,7 @@ export interface PredictionResponse {
     top_features: { feature: string; contribution: number }[];
     narrative: string;
   };
+  suggested_business_action: string;
 }
 
 export function usePredictionSchema(pipelineRunId: string | undefined) {

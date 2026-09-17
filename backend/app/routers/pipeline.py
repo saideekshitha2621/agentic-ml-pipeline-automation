@@ -20,6 +20,7 @@ from app.db.models import AgentDecision as AgentDecisionORM
 from app.db.models import Dataset as DatasetORM
 from app.db.models import Job as JobORM
 from app.db.models import PipelineRun as PipelineRunORM
+from app.db.models import PredictionLog as PredictionLogORM
 from app.schemas.pipeline import AgentDecision, DecisionReviewRequest, PipelineRun, PipelineRunCreateRequest
 
 router = APIRouter(prefix="/api/v1/pipeline-runs", tags=["pipeline"])
@@ -132,6 +133,73 @@ def training_progress(pipeline_run_id: str, db: Session = Depends(get_db)):
             "job_status": job.status, "progress_pct": job.progress_pct}
 
 
+@router.get("/{pipeline_run_id}/executive-summary")
+def executive_summary(pipeline_run_id: str, db: Session = Depends(get_db)):
+    """Read-only, computed on the fly from existing AgentDecision rows — no new storage.
+    Each field is null until its stage has run, so the summary is meaningful from the
+    first stage onward rather than only appearing once the run completes."""
+    _get_run_or_404(pipeline_run_id, db)
+
+    def _latest(agent_name: str) -> AgentDecisionORM | None:
+        return (
+            db.query(AgentDecisionORM)
+            .filter_by(pipeline_run_id=pipeline_run_id, agent_name=agent_name)
+            .order_by(AgentDecisionORM.created_at.desc())
+            .first()
+        )
+
+    framing = _latest("business_framing")
+    profiling = _latest("data_profiling")
+    recommendation = _latest("recommendation")
+    evaluation = _latest("evaluation")
+
+    business_problem = None
+    ml_type = None
+    target_variable = None
+    if framing:
+        business_problem = {
+            "statement": framing.decision_json["business_problem_statement"],
+            "prediction_objective": framing.decision_json.get("prediction_objective"),
+            "key_features": framing.decision_json.get("key_features", []),
+            "business_value": framing.decision_json.get("business_value"),
+        }
+        ml_type = framing.decision_json["ml_type_business_label"]
+        target_variable = framing.decision_json["target_variable"]
+
+    dataset_overview = None
+    if profiling:
+        du = profiling.decision_json.get("dataset_understanding", {})
+        dataset_overview = {
+            "n_rows": du.get("n_rows"), "n_columns": du.get("n_columns"),
+            "quality_summary": du.get("data_quality_summary"),
+        }
+
+    recommended_model = None
+    if recommendation:
+        top = recommendation.decision_json["top_choice"]
+        recommended_model = {
+            "algorithm": top["algorithm"], "rationale": top["rationale"],
+            "business_benefits": top.get("business_benefits", []),
+        }
+
+    performance_summary = None
+    if evaluation:
+        business_metrics = evaluation.decision_json.get("business_metrics", {})
+        performance_summary = {
+            "headline_metric_sentence": next(iter(business_metrics.values()), None),
+            "confidence": recommendation.decision_json.get("confidence") if recommendation else None,
+        }
+
+    return {
+        "business_problem": business_problem,
+        "dataset_overview": dataset_overview,
+        "ml_type": ml_type,
+        "target_variable": target_variable,
+        "recommended_model": recommended_model,
+        "performance_summary": performance_summary,
+    }
+
+
 @router.get("/{pipeline_run_id}/recommendation")
 def get_recommendation(pipeline_run_id: str, db: Session = Depends(get_db)):
     _get_run_or_404(pipeline_run_id, db)
@@ -157,7 +225,29 @@ def get_report(pipeline_run_id: str, db: Session = Depends(get_db)):
     )
     if not decision:
         raise HTTPException(409, "Report not generated yet — the run may still be executing.")
-    return decision.decision_json["report"]
+
+    report = dict(decision.decision_json["report"])
+    # The stored report is a snapshot from when the run completed, before any live
+    # Prediction Playground use — merge in actual predictions made since, at read time,
+    # so both this endpoint and the PDF export (which calls this function) stay current.
+    recent_predictions = (
+        db.query(PredictionLogORM)
+        .filter_by(pipeline_run_id=pipeline_run_id)
+        .order_by(PredictionLogORM.created_at.desc())
+        .limit(10)
+        .all()
+    )
+    report["predictions"] = [
+        {
+            "input": p.input_json,
+            "prediction": p.output_json.get("prediction"),
+            "confidence": f"{round(p.output_json['confidence'] * 100)}% confidence" if p.output_json.get("confidence") is not None else "n/a",
+            "suggested_business_action": p.output_json.get("suggested_business_action"),
+            "created_at": p.created_at.isoformat(),
+        }
+        for p in recent_predictions
+    ]
+    return report
 
 
 @router.get("/{pipeline_run_id}/report/export")

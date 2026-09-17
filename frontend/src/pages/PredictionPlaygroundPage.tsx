@@ -96,9 +96,12 @@ export default function PredictionPlaygroundPage() {
               </Stack>
             )}
             <Box>
-              <Typography variant="subtitle2">Why this prediction?</Typography>
+              <Typography variant="subtitle2">Key influencing factors</Typography>
               <Typography variant="body2" sx={{ mt: 0.5 }}>{predict.data.explanation.narrative}</Typography>
             </Box>
+            {predict.data.suggested_business_action && (
+              <Alert severity="info" sx={{ mt: 0.5 }}>{predict.data.suggested_business_action}</Alert>
+            )}
           </Stack>
         </Paper>
       )}

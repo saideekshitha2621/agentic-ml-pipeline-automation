@@ -15,6 +15,7 @@ from app.services import profiling_service
 HIGH_CARDINALITY_ABS = 50
 HIGH_CARDINALITY_RATIO = 0.5
 LEAKAGE_CORR_THRESHOLD = 0.98
+MIN_ROWS_TO_TRAIN = 10
 
 
 def _status(n_bad: int, warn_at: int = 1, critical_at: int | None = None) -> str:
@@ -25,8 +26,46 @@ def _status(n_bad: int, warn_at: int = 1, critical_at: int | None = None) -> str
     return "warning"
 
 
-def validate(df: pd.DataFrame, profile: dict, target_column: str | None = None) -> dict:
+def validate(df: pd.DataFrame, profile: dict, target_column: str | None = None, problem_type: str | None = None) -> dict:
     checks: list[dict] = []
+
+    n_rows = len(df)
+    checks.append(
+        {
+            "name": "Dataset size",
+            "status": "critical" if n_rows == 0 else "critical" if n_rows < MIN_ROWS_TO_TRAIN else "ok",
+            "detail": "The dataset is empty — there is nothing to train on."
+            if n_rows == 0
+            else f"Only {n_rows} row(s) — this is too few to train a reliable model (minimum recommended: {MIN_ROWS_TO_TRAIN})."
+            if n_rows < MIN_ROWS_TO_TRAIN
+            else f"{n_rows:,} rows is enough to proceed.",
+            "affected_columns": [],
+        }
+    )
+
+    if target_column:
+        if target_column not in df.columns:
+            checks.append(
+                {
+                    "name": "Target column validity",
+                    "status": "critical",
+                    "detail": f"The declared target column '{target_column}' does not exist in this dataset.",
+                    "affected_columns": [target_column],
+                }
+            )
+        else:
+            non_null = df[target_column].dropna()
+            n_distinct = int(non_null.nunique())
+            if non_null.empty:
+                status, detail = "critical", f"Every row is missing a '{target_column}' value — there's nothing to learn from."
+            elif problem_type == "classification" and n_distinct < 2:
+                status, detail = "critical", (
+                    f"Every row has the same '{target_column}' outcome ({non_null.iloc[0]!r}) — there's nothing for a "
+                    "classification model to learn to distinguish between."
+                )
+            else:
+                status, detail = "ok", f"'{target_column}' has {n_distinct} distinct value(s) — valid to train against."
+            checks.append({"name": "Target column validity", "status": status, "detail": detail, "affected_columns": [] if status == "ok" else [target_column]})
 
     missing = [m for m in profiling_service.missing_value_rows(df) if m["missing_count"] > 0]
     checks.append(

@@ -13,7 +13,9 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Job as JobORM
 from app.db.models import ModelRun as ModelRunORM
-from app.services import ranking_service, recommendation_service
+from app.services import business_language_service, ranking_service, recommendation_service
+
+_KEY_METRIC_BY_PROBLEM_TYPE = {"classification": "f1_macro", "clustering": "silhouette_score"}
 
 NEAR_TIE_COMPOSITE_DELTA = 0.05
 
@@ -69,6 +71,11 @@ def build_recommendation(job: JobORM, db: Session) -> dict:
             if run.problem_type == "clustering"
             else recommendation_service.prediction_class_breakdown(outputs)
         )
+        key_metric = _KEY_METRIC_BY_PROBLEM_TYPE.get(run.problem_type)
+        key_metric_sentence = business_language_service.metric_sentence(
+            key_metric, run_dict.get(key_metric), run.problem_type
+        ) if key_metric else ""
+        business_benefits = [s for s in [key_metric_sentence, *strengths] if s]
         entries.append(
             {
                 "cluster_run_id": run.id,
@@ -80,6 +87,7 @@ def build_recommendation(job: JobORM, db: Session) -> dict:
                 "strengths": strengths,
                 "weaknesses": weaknesses,
                 "cluster_size_breakdown": breakdown,
+                "business_benefits": business_benefits,
             }
         )
 

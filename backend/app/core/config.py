@@ -22,9 +22,13 @@ for d in (DATASETS_DIR, LABELS_DIR, PREDICTIONS_DIR, EXPORTS_DIR, JOBS_DIR, MODE
     d.mkdir(parents=True, exist_ok=True)
 
 # Unset by default — llm_service falls back to deterministic templates for every narrative
-# and the chat endpoint returns a "no LLM configured" message rather than failing.
+# and the chat endpoint returns a "no LLM configured" message rather than failing. Any of
+# the three can also be set at runtime via the Settings page (services/llm_config_service.py),
+# which takes precedence over these env vars when configured.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
 DATABASE_URL = f"sqlite:///{(STORAGE_DIR / 'app.db').as_posix()}"
 
