@@ -25,7 +25,6 @@ import {
   Description,
   SmartToy,
   Science,
-  Settings,
 } from "@mui/icons-material";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useWorkspace } from "./WorkspaceContext";
@@ -59,7 +58,6 @@ export default function NavShell({ children }: { children: ReactNode }) {
       icon: <Science />,
       path: pipelineRunId ? `/pipeline-runs/${pipelineRunId}/predict` : null,
     },
-    { label: "Settings", icon: <Settings />, path: "/settings" },
   ];
 
   return (

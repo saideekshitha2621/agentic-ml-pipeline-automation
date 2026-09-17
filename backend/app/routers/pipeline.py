@@ -237,16 +237,19 @@ def get_report(pipeline_run_id: str, db: Session = Depends(get_db)):
         .limit(10)
         .all()
     )
-    report["predictions"] = [
-        {
-            "input": p.input_json,
-            "prediction": p.output_json.get("prediction"),
-            "confidence": f"{round(p.output_json['confidence'] * 100)}% confidence" if p.output_json.get("confidence") is not None else "n/a",
-            "suggested_business_action": p.output_json.get("suggested_business_action"),
-            "created_at": p.created_at.isoformat(),
-        }
-        for p in recent_predictions
-    ]
+    report["prediction_capability"] = {
+        **report.get("prediction_capability", {}),
+        "example_predictions": [
+            {
+                "input": p.input_json,
+                "prediction": p.output_json.get("prediction"),
+                "confidence": f"{round(p.output_json['confidence'] * 100)}% confidence" if p.output_json.get("confidence") is not None else "n/a",
+                "suggested_business_action": p.output_json.get("suggested_business_action"),
+                "created_at": p.created_at.isoformat(),
+            }
+            for p in recent_predictions
+        ],
+    }
     return report
 
 

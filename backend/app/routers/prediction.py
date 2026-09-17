@@ -53,7 +53,7 @@ def predict(pipeline_run_id: str, body: PredictionRequest, db: Session = Depends
     # current input scaled against itself as a same-shape stand-in for the SHAP background
     # distribution; explain_prediction() falls back gracefully if this degrades the explainer.
     explanation = explainability_service.explain_prediction(
-        pipeline.estimator, np.tile(x_row, (10, 1)), x_row, pipeline.encoded_columns, db=db
+        pipeline.estimator, np.tile(x_row, (10, 1)), x_row, pipeline.encoded_columns
     )
     result["explanation"] = explanation
     result["suggested_business_action"] = business_language_service.business_action_for_prediction(

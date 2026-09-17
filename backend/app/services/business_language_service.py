@@ -74,7 +74,7 @@ def prediction_objective(target_column: str | None, key_features: list[str], pro
 
 
 def business_problem_statement(
-    dataset_filename: str, n_rows: int, problem_type: str | None, target_column: str | None, db=None
+    dataset_filename: str, n_rows: int, problem_type: str | None, target_column: str | None
 ) -> str:
     if problem_type == "clustering" or not target_column:
         goal = "discover natural groupings within the records so they can be treated differently by segment"
@@ -88,7 +88,6 @@ def business_problem_statement(
         "business_problem",
         {"dataset": dataset_filename, "n_rows": n_rows, "problem_type": problem_type, "target_column": target_column},
         fallback=template,
-        db=db,
     )
 
 

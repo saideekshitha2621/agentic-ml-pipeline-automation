@@ -7,22 +7,29 @@
 2. `chat()` — the Conversational Q&A endpoint. Builds a grounding context out of a
    pipeline run's own stored artifacts and answers a free-form question against it.
 
-Which provider/key is active is resolved per-call via `llm_config_service.get_active_config`
-(DB Settings override, else env vars, else None) — see that module for exactly where keys
-can be configured. Each provider's SDK is imported lazily inside a try/except so a package
-that isn't installed just makes that provider unavailable rather than crashing the app.
+Provider/key configuration is env-var only — set exactly one of ANTHROPIC_API_KEY,
+GEMINI_API_KEY, or OPENAI_API_KEY (see app/core/config.py, checked in that order). Each
+provider's SDK is imported lazily inside a try/except so a package that isn't installed
+just makes that provider unavailable rather than crashing the app.
 """
 from __future__ import annotations
 
-from sqlalchemy.orm import Session
-
-from app.services import llm_config_service
+from app.core.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, GEMINI_API_KEY, OPENAI_API_KEY
 
 _SYSTEM_EXPLAIN = (
     "You are an AutoML pipeline agent explaining a technical decision to a business "
     "stakeholder in 1-3 plain-English sentences. No jargon, no markdown, no preamble like "
     "'Sure' or 'Here is'. Be concrete: cite the numbers given."
 )
+
+_DEFAULT_MODELS = {"anthropic": ANTHROPIC_MODEL, "gemini": "gemini-2.0-flash", "openai": "gpt-4o-mini"}
+
+
+def _active_config() -> dict | None:
+    for provider, api_key in (("anthropic", ANTHROPIC_API_KEY), ("gemini", GEMINI_API_KEY), ("openai", OPENAI_API_KEY)):
+        if api_key:
+            return {"provider": provider, "api_key": api_key, "model": _DEFAULT_MODELS[provider]}
+    return None
 
 
 def _call_anthropic(api_key: str, model: str, system: str, messages: list[dict], max_tokens: int) -> str:
@@ -61,23 +68,20 @@ _DISPATCH = {"anthropic": _call_anthropic, "openai": _call_openai, "gemini": _ca
 
 
 def call(provider: str, api_key: str, model: str, system: str, messages: list[dict], max_tokens: int = 400) -> str:
-    """Raises on failure — callers decide whether to fall back or surface the error
-    (the Settings page's Test Connection wants the real error; explain()/chat() below
-    want a silent fallback)."""
     fn = _DISPATCH.get(provider)
     if fn is None:
         raise ValueError(f"Unknown LLM provider '{provider}'.")
     return fn(api_key, model, system, messages, max_tokens)
 
 
-def is_configured(db: Session) -> bool:
-    return llm_config_service.get_active_config(db) is not None
+def is_configured() -> bool:
+    return _active_config() is not None
 
 
-def explain(kind: str, context: dict, fallback: str, db: Session | None = None) -> str:
+def explain(kind: str, context: dict, fallback: str) -> str:
     """`fallback` is the deterministic template string the caller already built — used
     verbatim when no LLM is configured, and as the safety net if the call fails."""
-    config = llm_config_service.get_active_config(db) if db is not None else None
+    config = _active_config()
     if config is None:
         return fallback
     try:
@@ -91,14 +95,14 @@ def explain(kind: str, context: dict, fallback: str, db: Session | None = None) 
         return fallback
 
 
-def chat(question: str, grounding_context: str, history: list[dict], db: Session | None = None) -> str:
-    config = llm_config_service.get_active_config(db) if db is not None else None
+def chat(question: str, grounding_context: str, history: list[dict]) -> str:
+    config = _active_config()
     if config is None:
         return (
-            "Conversational Q&A needs an LLM provider configured — set one up on the "
-            "Settings page (or an ANTHROPIC_API_KEY/GEMINI_API_KEY/OPENAI_API_KEY env var). "
-            "Once set, I can answer questions grounded in this run's dataset profile, agent "
-            "decisions, and model results."
+            "Conversational Q&A needs an LLM provider configured — set ANTHROPIC_API_KEY, "
+            "GEMINI_API_KEY, or OPENAI_API_KEY in the backend's environment. Once set, I can "
+            "answer questions grounded in this run's dataset profile, agent decisions, and "
+            "model results."
         )
     try:
         system = (

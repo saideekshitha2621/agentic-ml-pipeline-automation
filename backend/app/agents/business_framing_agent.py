@@ -14,12 +14,12 @@ from app.services import business_language_service
 
 def frame(
     dataset_filename: str, n_rows: int, problem_type: str, target_column: str | None,
-    column_roles: dict | None = None, db=None,
+    column_roles: dict | None = None,
 ) -> dict:
     key_features = business_language_service.key_features_list(column_roles or {}, target_column)
     return {
         "business_problem_statement": business_language_service.business_problem_statement(
-            dataset_filename, n_rows, problem_type, target_column, db=db
+            dataset_filename, n_rows, problem_type, target_column
         ),
         "ml_type_business_label": business_language_service.ml_type_business_label(problem_type),
         "target_variable": target_column,

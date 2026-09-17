@@ -1,12 +1,9 @@
 from __future__ import annotations
 
-import os
-
 import pandas as pd
-import pytest
 
 from app.agents import data_profiling_agent, data_validation_agent
-from app.services import error_translation_service, llm_config_service
+from app.services import error_translation_service, llm_service
 from app.services.preprocessing_service import MissingValueValidationError
 
 
@@ -74,24 +71,20 @@ def test_error_translation_generic_fallback_has_no_raw_exception_repr():
     assert "some obscure internal detail" not in message
 
 
-def test_llm_config_env_fallback(monkeypatch):
-    monkeypatch.setattr("app.services.llm_config_service.ANTHROPIC_API_KEY", "env-key-123")
-    monkeypatch.setattr("app.services.llm_config_service.GEMINI_API_KEY", None)
-    monkeypatch.setattr("app.services.llm_config_service.OPENAI_API_KEY", None)
-    monkeypatch.setattr("app.services.llm_config_service._ENV_PROVIDERS", [
-        ("anthropic", "env-key-123"), ("gemini", None), ("openai", None),
-    ])
+def test_llm_service_env_fallback(monkeypatch):
+    monkeypatch.setattr("app.services.llm_service.ANTHROPIC_API_KEY", None)
+    monkeypatch.setattr("app.services.llm_service.GEMINI_API_KEY", "env-gemini-key")
+    monkeypatch.setattr("app.services.llm_service.OPENAI_API_KEY", None)
 
-    class _FakeDB:
-        def get(self, *_args, **_kwargs):
-            return None
-
-    config = llm_config_service.get_active_config(_FakeDB())
-    assert config["provider"] == "anthropic"
-    assert config["source"] == "environment"
+    config = llm_service._active_config()
+    assert config["provider"] == "gemini"
+    assert config["api_key"] == "env-gemini-key"
 
 
-def test_llm_config_mask():
-    key = "sk-abcdefgh1234"
-    assert llm_config_service.mask(key) == "*" * (len(key) - 4) + "1234"
-    assert llm_config_service.mask(None) is None
+def test_llm_service_no_provider_configured_falls_back_to_template(monkeypatch):
+    monkeypatch.setattr("app.services.llm_service.ANTHROPIC_API_KEY", None)
+    monkeypatch.setattr("app.services.llm_service.GEMINI_API_KEY", None)
+    monkeypatch.setattr("app.services.llm_service.OPENAI_API_KEY", None)
+
+    assert llm_service.is_configured() is False
+    assert llm_service.explain("test", {}, fallback="the template text") == "the template text"

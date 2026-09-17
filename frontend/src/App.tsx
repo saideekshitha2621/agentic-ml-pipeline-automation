@@ -18,7 +18,6 @@ import VisualizationPage from "./pages/VisualizationPage";
 import ReportsPage from "./pages/ReportsPage";
 import PipelineRunPage from "./pages/PipelineRunPage";
 import PredictionPlaygroundPage from "./pages/PredictionPlaygroundPage";
-import SettingsPage from "./pages/SettingsPage";
 
 const queryClient = new QueryClient();
 
@@ -45,7 +44,6 @@ export default function App() {
                 <Route path="/jobs/:jobId/reports" element={<ReportsPage />} />
                 <Route path="/pipeline-runs/:pipelineRunId" element={<PipelineRunPage />} />
                 <Route path="/pipeline-runs/:pipelineRunId/predict" element={<PredictionPlaygroundPage />} />
-                <Route path="/settings" element={<SettingsPage />} />
               </Routes>
             </NavShell>
           </BrowserRouter>

@@ -286,47 +286,61 @@ export interface AgentRecommendation {
 }
 
 export interface PipelineReport {
-  dataset_summary: { filename: string; n_rows: number; n_columns: number; data_quality_score: number };
-  analysis_summary: { problem_type: string | null; reasoning: string | null; confidence: number | null };
-  decisions_taken: { agent: string; stage: string; reasoning: string; status: string }[];
-  models_evaluated: {
-    algorithm: string;
-    rank: number | null;
-    silhouette_score: number | null;
-    davies_bouldin_score: number | null;
-    calinski_harabasz_score: number | null;
-    composite_score: number | null;
-  }[];
-  recommendation_details: AgentRecommendation | null;
-  human_decisions: {
-    stage: string;
-    agent: string;
-    status: string;
-    approved_by: string | null;
-    override_reason: string | null;
-    human_edits: Record<string, unknown> | null;
-  }[];
-  final_outcome: string;
-  executive_summary?: {
-    business_problem: string | null;
-    dataset_overview: string;
-    ml_type: string | null;
-    target_variable: string | null;
-    recommended_model: string | null;
-    performance_summary: string | null;
+  title: string;
+  executive_summary: {
+    problem_statement: string | null;
+    dataset_overview: {
+      dataset_name: string;
+      total_records: number;
+      features_analyzed: string[];
+      target_variable: string | null;
+      business_domain: string;
+    };
   };
-  problem_statement?: string | null;
-  data_quality_findings?: string;
-  actions_taken?: string[];
-  model_recommendation?: { algorithm: string; rationale: string; business_benefits: string[] } | null;
-  performance_summary?: Record<string, string>;
-  predictions?: {
-    input: Record<string, unknown>;
-    prediction: string | number;
-    confidence: string;
-    suggested_business_action: string | null;
-    created_at: string;
-  }[];
-  business_insights?: string[];
-  recommendations?: string[];
+  data_quality_summary: {
+    issues_detected: { missing_values: number; duplicate_records: number; invalid_data: number };
+    actions_taken: { column: string; missing_values: number; action: string; reason: string }[];
+    duplicate_handling: string;
+  };
+  data_preparation_summary: {
+    steps: string[];
+    train_pct: number | null;
+    test_pct: number | null;
+  };
+  model_selection_summary: {
+    algorithms_evaluated: string[];
+    selected_model: string | null;
+    why_selected: string | null;
+    hyperparameter_optimization: string;
+  };
+  model_performance: {
+    reliability_sentence: string | null;
+    confidence_level: string;
+    confidence_explanation: string;
+  };
+  key_insights: string[];
+  prediction_capability: {
+    description: string | null;
+    example_predictions: {
+      input: Record<string, unknown>;
+      prediction: string | number;
+      confidence: string;
+      suggested_business_action: string | null;
+      created_at: string;
+    }[];
+  };
+  business_recommendations: string[];
+  conclusion: string;
+  technical_appendix: {
+    model_details: Record<string, unknown>;
+    hyperparameters: Record<string, unknown>;
+    train_test_split: { training: number; testing: number } | null;
+    model_training_summary: {
+      algorithms_evaluated: number;
+      hyperparameter_optimization: boolean;
+      champion_model: string | null;
+      prediction_type: string;
+    };
+  };
+  final_outcome: string;
 }

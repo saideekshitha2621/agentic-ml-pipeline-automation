@@ -16,6 +16,11 @@ import {
   Step,
   StepLabel,
   Stepper,
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableRow,
   TextField,
   Typography,
 } from "@mui/material";
@@ -439,7 +444,7 @@ export default function PipelineRunPage() {
       {run.status === "completed" && report && (
         <Paper variant="outlined" sx={{ p: 3 }}>
           <Stack direction="row" sx={{ justifyContent: "space-between", alignItems: "center", mb: 2 }}>
-            <Typography variant="h6">Business Report</Typography>
+            <Typography variant="h6">{report.title}</Typography>
             <Button variant="contained" href={pipelineReportExportUrl(run.id)} target="_blank" rel="noreferrer">
               Download PDF
             </Button>
@@ -447,67 +452,126 @@ export default function PipelineRunPage() {
           <Stack spacing={2.5}>
             <Box>
               <Typography variant="subtitle1">Executive Summary</Typography>
-              <Typography variant="body2"><b>Business problem:</b> {report.executive_summary?.business_problem ?? "—"}</Typography>
-              <Typography variant="body2"><b>Dataset:</b> {report.executive_summary?.dataset_overview}</Typography>
-              <Typography variant="body2"><b>ML type:</b> {report.executive_summary?.ml_type ?? "Pending"}</Typography>
-              <Typography variant="body2"><b>Target variable:</b> {report.executive_summary?.target_variable ?? "None (unsupervised)"}</Typography>
-              <Typography variant="body2"><b>Recommended model:</b> {report.executive_summary?.recommended_model ?? "Pending"}</Typography>
-              <Typography variant="body2"><b>Performance:</b> {report.executive_summary?.performance_summary ?? "Pending"}</Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>{report.executive_summary.problem_statement}</Typography>
+              <Table size="small" sx={{ mt: 1 }}>
+                <TableBody>
+                  <TableRow><TableCell>Dataset Name</TableCell><TableCell>{report.executive_summary.dataset_overview.dataset_name}</TableCell></TableRow>
+                  <TableRow><TableCell>Total Records</TableCell><TableCell>{report.executive_summary.dataset_overview.total_records.toLocaleString()}</TableCell></TableRow>
+                  <TableRow><TableCell>Features Analyzed</TableCell><TableCell>{report.executive_summary.dataset_overview.features_analyzed.join(", ") || "—"}</TableCell></TableRow>
+                  <TableRow><TableCell>Target Variable</TableCell><TableCell>{report.executive_summary.dataset_overview.target_variable ?? "None (unsupervised)"}</TableCell></TableRow>
+                  <TableRow><TableCell>Business Domain</TableCell><TableCell>{report.executive_summary.dataset_overview.business_domain}</TableCell></TableRow>
+                </TableBody>
+              </Table>
             </Box>
+
             <Box>
-              <Typography variant="subtitle1">Problem Statement</Typography>
-              <Typography variant="body2">{report.problem_statement}</Typography>
+              <Typography variant="subtitle1">Data Quality Summary</Typography>
+              <Table size="small" sx={{ mt: 1 }}>
+                <TableHead><TableRow><TableCell>Issue</TableCell><TableCell align="right">Count</TableCell></TableRow></TableHead>
+                <TableBody>
+                  <TableRow><TableCell>Missing Values</TableCell><TableCell align="right">{report.data_quality_summary.issues_detected.missing_values}</TableCell></TableRow>
+                  <TableRow><TableCell>Duplicate Records</TableCell><TableCell align="right">{report.data_quality_summary.issues_detected.duplicate_records}</TableCell></TableRow>
+                  <TableRow><TableCell>Invalid Data</TableCell><TableCell align="right">{report.data_quality_summary.issues_detected.invalid_data}</TableCell></TableRow>
+                </TableBody>
+              </Table>
+              {report.data_quality_summary.actions_taken.length > 0 && (
+                <Table size="small" sx={{ mt: 1 }}>
+                  <TableHead><TableRow><TableCell>Column</TableCell><TableCell align="right">Missing</TableCell><TableCell>Action</TableCell><TableCell>Reason</TableCell></TableRow></TableHead>
+                  <TableBody>
+                    {report.data_quality_summary.actions_taken.map((a, i) => (
+                      <TableRow key={i}>
+                        <TableCell>{a.column}</TableCell><TableCell align="right">{a.missing_values}</TableCell>
+                        <TableCell>{a.action}</TableCell><TableCell>{a.reason}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+              <Typography variant="body2" sx={{ mt: 1 }}>{report.data_quality_summary.duplicate_handling}</Typography>
             </Box>
+
             <Box>
-              <Typography variant="subtitle1">Data Quality Findings</Typography>
-              <Typography variant="body2">{report.data_quality_findings}</Typography>
+              <Typography variant="subtitle1">Data Preparation Summary</Typography>
+              <Stack component="ul" sx={{ m: 0, pl: 2.5, mt: 0.5 }}>
+                {report.data_preparation_summary.steps.map((s, i) => <Typography key={i} component="li" variant="body2">{s}</Typography>)}
+              </Stack>
+              {report.data_preparation_summary.train_pct !== null && (
+                <Typography variant="body2" sx={{ mt: 0.5 }}>
+                  Training Data: {report.data_preparation_summary.train_pct}% &nbsp;·&nbsp; Testing Data: {report.data_preparation_summary.test_pct}%
+                </Typography>
+              )}
             </Box>
+
             <Box>
-              <Typography variant="subtitle1">Actions Taken</Typography>
-              <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
-                {report.actions_taken?.map((a, i) => <Typography key={i} component="li" variant="body2">{a}</Typography>)}
+              <Typography variant="subtitle1">Model Selection Summary</Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>
+                <b>Algorithms evaluated:</b> {report.model_selection_summary.algorithms_evaluated.join(", ") || "—"}
+              </Typography>
+              <Typography variant="body2"><b>Selected model:</b> {report.model_selection_summary.selected_model ?? "Pending"}</Typography>
+              <Typography variant="body2"><b>Why selected:</b> {report.model_selection_summary.why_selected}</Typography>
+              <Typography variant="body2"><b>Hyperparameter optimization:</b> {report.model_selection_summary.hyperparameter_optimization}</Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="subtitle1">Model Performance</Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>{report.model_performance.reliability_sentence}</Typography>
+              <Stack direction="row" spacing={1} sx={{ alignItems: "center", mt: 0.5 }}>
+                <Chip size="small" label={report.model_performance.confidence_level} color={report.model_performance.confidence_level === "High" ? "success" : "warning"} />
+                <Typography variant="body2">{report.model_performance.confidence_explanation}</Typography>
               </Stack>
             </Box>
-            {report.model_recommendation && (
-              <Box>
-                <Typography variant="subtitle1">Model Recommendation</Typography>
-                <Typography variant="body2">
-                  <b>{report.model_recommendation.algorithm.replace(/_/g, " ")}</b> — {report.model_recommendation.rationale}
-                </Typography>
-              </Box>
-            )}
-            {report.performance_summary && Object.keys(report.performance_summary).length > 0 && (
-              <Box>
-                <Typography variant="subtitle1">Performance Summary</Typography>
-                <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
-                  {Object.values(report.performance_summary).map((s, i) => <Typography key={i} component="li" variant="body2">{s}</Typography>)}
-                </Stack>
-              </Box>
-            )}
-            {report.predictions && report.predictions.length > 0 && (
-              <Box>
-                <Typography variant="subtitle1">Predictions</Typography>
-                <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
-                  {report.predictions.map((p, i) => (
+
+            <Box>
+              <Typography variant="subtitle1">Key Insights</Typography>
+              <Stack component="ul" sx={{ m: 0, pl: 2.5, mt: 0.5 }}>
+                {report.key_insights.map((s, i) => <Typography key={i} component="li" variant="body2">{s}</Typography>)}
+              </Stack>
+            </Box>
+
+            <Box>
+              <Typography variant="subtitle1">Prediction Capability</Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>{report.prediction_capability.description}</Typography>
+              {report.prediction_capability.example_predictions.length > 0 && (
+                <Stack component="ul" sx={{ m: 0, pl: 2.5, mt: 0.5 }}>
+                  {report.prediction_capability.example_predictions.map((p, i) => (
                     <Typography key={i} component="li" variant="body2">
                       {JSON.stringify(p.input)} → <b>{String(p.prediction)}</b> ({p.confidence})
                       {p.suggested_business_action ? ` — ${p.suggested_business_action}` : ""}
                     </Typography>
                   ))}
                 </Stack>
-              </Box>
-            )}
+              )}
+            </Box>
+
             <Box>
-              <Typography variant="subtitle1">Business Insights</Typography>
-              <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
-                {report.business_insights?.map((s, i) => <Typography key={i} component="li" variant="body2">{s}</Typography>)}
+              <Typography variant="subtitle1">Business Recommendations</Typography>
+              <Stack component="ul" sx={{ m: 0, pl: 2.5, mt: 0.5 }}>
+                {report.business_recommendations.map((s, i) => <Typography key={i} component="li" variant="body2">{s}</Typography>)}
               </Stack>
             </Box>
+
             <Box>
-              <Typography variant="subtitle1">Recommendations</Typography>
-              <Stack component="ul" sx={{ m: 0, pl: 2.5 }}>
-                {report.recommendations?.map((s, i) => <Typography key={i} component="li" variant="body2">{s}</Typography>)}
-              </Stack>
+              <Typography variant="subtitle1">Conclusion</Typography>
+              <Typography variant="body2" sx={{ mt: 0.5 }}>{report.conclusion}</Typography>
+            </Box>
+
+            <Box>
+              <Typography variant="subtitle1">Technical Appendix</Typography>
+              {Object.keys(report.technical_appendix.model_details).length > 0 && (
+                <Table size="small" sx={{ mt: 1 }}>
+                  <TableHead><TableRow><TableCell>Metric</TableCell><TableCell>Value</TableCell></TableRow></TableHead>
+                  <TableBody>
+                    {Object.entries(report.technical_appendix.model_details).map(([k, v]) => (
+                      <TableRow key={k}><TableCell>{k}</TableCell><TableCell>{typeof v === "object" ? JSON.stringify(v) : String(v)}</TableCell></TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              )}
+              {report.technical_appendix.train_test_split && (
+                <Typography variant="body2" sx={{ mt: 1 }}>
+                  Training: {report.technical_appendix.train_test_split.training} records · Testing: {report.technical_appendix.train_test_split.testing} records
+                </Typography>
+              )}
             </Box>
           </Stack>
         </Paper>

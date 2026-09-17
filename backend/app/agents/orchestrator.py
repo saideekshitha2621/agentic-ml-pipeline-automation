@@ -142,7 +142,7 @@ def advance_after_problem_approval(pipeline_run_id: str) -> None:
 
         framing = business_framing_agent.frame(
             dataset.filename, dataset.n_rows, problem_type, run.declared_target,
-            column_roles=profile.get("column_roles"), db=db,
+            column_roles=profile.get("column_roles"),
         )
         _decide(
             db, run, agent_name="business_framing", stage="business_framing", decision=framing,

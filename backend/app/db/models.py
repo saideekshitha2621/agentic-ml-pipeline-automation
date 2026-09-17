@@ -254,20 +254,3 @@ class PredictionLog(Base):
     input_json: Mapped[dict] = mapped_column(JSON, default=dict)
     output_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-
-
-class AppSettings(Base):
-    """Singleton row (id is always 'default') holding the runtime-editable LLM provider
-    configuration set via the Settings page. Takes precedence over the ANTHROPIC_API_KEY/
-    GEMINI_API_KEY/OPENAI_API_KEY env vars when llm_provider+llm_api_key are both set — see
-    services/llm_config_service.py::get_active_config(). Stored in plaintext in this local,
-    single-user SQLite database, the same trust level as every other row in it; the API
-    only ever returns it back masked (see llm_config_service.mask())."""
-
-    __tablename__ = "app_settings"
-
-    id: Mapped[str] = mapped_column(String, primary_key=True, default=lambda: "default")
-    llm_provider: Mapped[str | None] = mapped_column(String, nullable=True)  # anthropic|gemini|openai
-    llm_api_key: Mapped[str | None] = mapped_column(String, nullable=True)
-    llm_model: Mapped[str | None] = mapped_column(String, nullable=True)
-    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
