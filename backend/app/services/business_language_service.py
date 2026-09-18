@@ -122,10 +122,22 @@ def metric_sentence(metric_key: str, value: float | None, problem_type: str = "c
         return f"The groups found are {quality} from one another."
     if metric_key == "calinski_harabasz_score":
         return "The groups found are dense and well-separated from each other, based on how tightly records cluster within each group."
+    if metric_key == "r2":
+        pct = round(max(0.0, min(1.0, value)) * 100)
+        return f"The model explains about {pct} out of 100 parts of the variation in the outcome — the rest comes from factors it doesn't have data on."
+    if metric_key == "rmse":
+        return f"Predictions are typically off by about {value:.2f} (root mean squared error) from the actual value."
+    if metric_key == "mae":
+        return f"On average, predictions are off by about {value:.2f} (mean absolute error) from the actual value."
+    if metric_key == "mape":
+        pct = round(value * 100)
+        return f"Predictions are typically within about {pct}% of the actual value."
     return ""
 
 
 def business_action_for_prediction(confidence: float | None, problem_type: str = "classification") -> str:
+    if problem_type == "regression" and confidence is None:
+        return "Recommended action: use this estimate for planning, but treat it as an approximation — validate against actuals before high-stakes decisions."
     if confidence is None:
         band = "medium"
     elif confidence >= 0.8:

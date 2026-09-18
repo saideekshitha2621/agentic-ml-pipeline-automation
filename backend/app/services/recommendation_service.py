@@ -7,7 +7,44 @@ import numpy as np
 def strengths_and_weaknesses(run: dict, problem_type: str = "clustering") -> tuple[list[str], list[str]]:
     if problem_type == "classification":
         return _classification_strengths_and_weaknesses(run)
+    if problem_type == "regression":
+        return _regression_strengths_and_weaknesses(run)
     return _clustering_strengths_and_weaknesses(run)
+
+
+def _regression_strengths_and_weaknesses(run: dict) -> tuple[list[str], list[str]]:
+    strengths, weaknesses = [], []
+    metrics = run.get("metrics", run)
+    r2 = metrics.get("r2")
+    rmse = metrics.get("rmse")
+    mae = metrics.get("mae")
+
+    if r2 is not None:
+        if r2 > 0.8:
+            strengths.append(f"Explains most of the variation in the target (R² {r2:.3f}).")
+        elif r2 < 0.3:
+            weaknesses.append(f"Explains little of the variation in the target (R² {r2:.3f}).")
+
+    if rmse is not None:
+        strengths.append(f"Typical prediction error (RMSE) of {rmse:.3f}.")
+    if mae is not None:
+        strengths.append(f"Average absolute error (MAE) of {mae:.3f}.")
+
+    if not strengths:
+        strengths.append("Completed successfully with valid predictions on the held-out test set.")
+    return strengths, weaknesses
+
+
+def prediction_stats_breakdown(y_pred: np.ndarray) -> dict[str, float]:
+    """Regression's counterpart to `prediction_class_breakdown` — a continuous prediction
+    array has no discrete "classes" to count, so summarize its distribution instead."""
+    values = np.asarray(y_pred, dtype=float)
+    return {
+        "min": round(float(values.min()), 4),
+        "max": round(float(values.max()), 4),
+        "mean": round(float(values.mean()), 4),
+        "std": round(float(values.std()), 4),
+    }
 
 
 def _classification_strengths_and_weaknesses(run: dict) -> tuple[list[str], list[str]]:

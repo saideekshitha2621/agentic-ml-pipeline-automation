@@ -57,7 +57,7 @@ def predict(pipeline_run_id: str, body: PredictionRequest, db: Session = Depends
     )
     result["explanation"] = explanation
     result["suggested_business_action"] = business_language_service.business_action_for_prediction(
-        result.get("confidence")
+        result.get("confidence"), problem_type=run.problem_type
     )
 
     db.add(PredictionLogORM(pipeline_run_id=pipeline_run_id, input_json=body.features, output_json=result))

@@ -7,7 +7,7 @@ algorithms to try, not their hyperparameters (that's the HPO stage).
 """
 from __future__ import annotations
 
-from app.plugins.registry import CLASSIFICATION_PLUGIN_REGISTRY, PLUGIN_REGISTRY
+from app.plugins.registry import CLASSIFICATION_PLUGIN_REGISTRY, PLUGIN_REGISTRY, REGRESSION_PLUGIN_REGISTRY
 
 LARGE_DATASET_ROWS = 5000
 
@@ -17,6 +17,14 @@ _CLASSIFICATION_RATIONALE = {
     "gradient_boosting": "Often the strongest tabular-data performer, at the cost of longer training time.",
     "knn": "Simple distance-based method — effective when the dataset is small enough to stay fast.",
     "svm": "Strong for high-dimensional or well-separated data, but can be slow on larger datasets.",
+}
+
+_REGRESSION_RATIONALE = {
+    "linear_regression": "A fast, interpretable linear baseline (with a small regularization penalty) — good for establishing a performance floor.",
+    "random_forest": "Handles nonlinear relationships and mixed numeric/categorical features well, with little tuning.",
+    "gradient_boosting": "Often the strongest tabular-data performer, at the cost of longer training time.",
+    "knn": "Simple distance-based method — effective when the dataset is small enough to stay fast.",
+    "svr": "Strong for high-dimensional or well-separated data, but can be slow on larger datasets.",
 }
 
 _CLUSTERING_RATIONALE = {
@@ -36,6 +44,8 @@ def recommend(profile: dict, problem_type: str) -> dict:
 
     if problem_type == "classification":
         registry, rationale_map = CLASSIFICATION_PLUGIN_REGISTRY, _CLASSIFICATION_RATIONALE
+    elif problem_type == "regression":
+        registry, rationale_map = REGRESSION_PLUGIN_REGISTRY, _REGRESSION_RATIONALE
     else:
         registry, rationale_map = PLUGIN_REGISTRY, _CLUSTERING_RATIONALE
 
@@ -43,7 +53,7 @@ def recommend(profile: dict, problem_type: str) -> dict:
     for name in registry:
         rationale = rationale_map.get(name, "Registered candidate algorithm for this problem type.")
         recommended = True
-        if is_large and name in ("knn", "svm", "spectral", "hierarchical"):
+        if is_large and name in ("knn", "svm", "svr", "spectral", "hierarchical"):
             recommended = False
             rationale += f" Not recommended by default — {n_rows:,} rows may make this slow; you can still include it."
         shortlist.append({"algorithm": name, "recommended": recommended, "rationale": rationale})

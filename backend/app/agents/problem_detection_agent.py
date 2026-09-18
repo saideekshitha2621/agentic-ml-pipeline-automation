@@ -22,10 +22,17 @@ WEAK_SIGNAL_CONFIDENCE_CAP = 0.55
 LOW_CONFIDENCE_THRESHOLD = 0.6
 
 
-def _classify_target_dtype(series: pd.Series, role: str) -> tuple[str, float, str]:
+def _classify_target_dtype(series: pd.Series) -> tuple[str, float, str]:
+    """Decides classification vs. regression from the target's actual dtype/cardinality —
+    deliberately independent of the profiler's coarse column "role" tag. That tag's
+    `id_like` bucket exists to exclude high-uniqueness *feature* columns (customer_id,
+    order_id) from modeling; a continuous regression target (price, revenue) is *also*
+    high-uniqueness by nature, so reusing that tag here used to misclassify a legitimate
+    regression target as "id_like" -> categorical -> classification, which then crashed
+    downstream (stratifying a train/test split on ~400 near-unique float values)."""
     n = int(series.nunique(dropna=True))
     n_rows = len(series) or 1
-    if role == "numeric":
+    if pd.api.types.is_numeric_dtype(series):
         ratio = n / n_rows
         if n > REGRESSION_MIN_DISTINCT and ratio > REGRESSION_MIN_DISTINCT_RATIO:
             return (
@@ -63,8 +70,7 @@ def detect(df: pd.DataFrame, profile: dict, declared_target: str | None = None) 
                 0.3,
                 [f"Declared target '{declared_target}' was not found in the dataset — falling back to clustering."],
             )
-        role_meta = roles.get(declared_target, {"role": "numeric"})
-        problem_type, confidence, reason = _classify_target_dtype(df[declared_target], role_meta["role"])
+        problem_type, confidence, reason = _classify_target_dtype(df[declared_target])
         return _decision(
             problem_type,
             declared_target,
@@ -90,8 +96,7 @@ def detect(df: pd.DataFrame, profile: dict, declared_target: str | None = None) 
             ["No plausible target column detected (no non-identifier column in a conventional label position)."],
         )
 
-    role_meta = roles[last_col]
-    problem_type, base_confidence, reason = _classify_target_dtype(df[last_col], role_meta["role"])
+    problem_type, base_confidence, reason = _classify_target_dtype(df[last_col])
     confidence = min(base_confidence, WEAK_SIGNAL_CONFIDENCE_CAP)
     return _decision(
         problem_type,

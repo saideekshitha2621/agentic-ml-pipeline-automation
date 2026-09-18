@@ -7,11 +7,14 @@ these roles instead of raw dtypes.
 """
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 ID_LIKE_UNIQUENESS_THRESHOLD = 0.95
 CATEGORICAL_CARDINALITY_CAP_RATIO = 0.05
 CATEGORICAL_CARDINALITY_CAP_ABS = 20
+_ID_NAME_PATTERN = re.compile(r"(^id$|_id$|^id_|uuid|guid|^key$|_key$|^code$|_code$)", re.IGNORECASE)
 
 
 def _looks_like_datetime(series: pd.Series) -> bool:
@@ -24,11 +27,25 @@ def _looks_like_datetime(series: pd.Series) -> bool:
     return parsed.notna().mean() > 0.9
 
 
+def _is_id_like(series: pd.Series, uniqueness_ratio: float) -> bool:
+    if uniqueness_ratio <= ID_LIKE_UNIQUENESS_THRESHOLD:
+        return False
+    if pd.api.types.is_float_dtype(series):
+        return False  # continuous measurements are often naturally all-unique, not identifiers
+    if pd.api.types.is_integer_dtype(series):
+        # A high-cardinality integer is genuinely ambiguous (customer_id vs. sqft/
+        # age_in_days) — only call it id-like when the column name also looks like one,
+        # otherwise a real, often highly-predictive numeric feature gets excluded.
+        name = str(series.name or "")
+        return bool(_ID_NAME_PATTERN.search(name))
+    return True
+
+
 def _column_role(series: pd.Series, n_rows: int) -> dict:
     nunique = int(series.nunique(dropna=True))
     uniqueness_ratio = nunique / n_rows if n_rows else 0.0
 
-    if uniqueness_ratio > ID_LIKE_UNIQUENESS_THRESHOLD:
+    if _is_id_like(series, uniqueness_ratio):
         role = "id_like"
     elif _looks_like_datetime(series):
         role = "datetime"

@@ -40,6 +40,13 @@ def test_cleaning_plan_escalates_on_no_information_column():
     assert "no usable information" in reason.lower()
 
 
+def test_cleaning_plan_escalates_on_leakage_driven_drop():
+    decision = {"recommendations": [{"column": "sqft", "action": "drop_column", "issue": "data leakage risk", "no_information": False}]}
+    auto, reason = approval_policy_service.decide("cleaning_plan", decision, 0.9)
+    assert auto is False
+    assert "leakage" in reason.lower()
+
+
 def test_cleaning_plan_escalates_on_large_missing_target():
     decision = {"recommendations": [], "target_missing": {"column": "y", "missing_pct": 35.0}}
     auto, reason = approval_policy_service.decide("cleaning_plan", decision, 0.9)

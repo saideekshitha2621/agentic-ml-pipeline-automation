@@ -14,6 +14,12 @@ _GLOSSARY = {
     "davies_bouldin_score": "Average similarity between each cluster and its most similar neighbor — lower is better.",
     "calinski_harabasz_score": "Ratio of between-cluster to within-cluster dispersion — higher means denser, "
     "better-separated clusters.",
+    "rmse": "Root mean squared error — the typical size of a prediction's miss, in the same units as the target, "
+    "with larger misses penalized more heavily.",
+    "mae": "Mean absolute error — the average size of a prediction's miss, in the same units as the target.",
+    "mape": "Mean absolute percentage error — the average miss size as a percentage of the actual value.",
+    "r2": "R² (coefficient of determination) — the share of the target's variation the model explains, from 0 "
+    "(none) to 1 (all of it).",
 }
 
 

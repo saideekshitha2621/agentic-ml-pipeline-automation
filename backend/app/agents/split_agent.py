@@ -1,16 +1,17 @@
 """Train/Test Split Agent — recommends a split ratio (and whether to stratify) by dataset
-size, for classification only (clustering has no held-out set)."""
+size, for supervised problem types only (clustering has no held-out set)."""
 from __future__ import annotations
 
 import pandas as pd
 
 SMALL_DATASET_ROWS = 1000
 TINY_DATASET_ROWS = 200
+SUPERVISED_PROBLEM_TYPES = {"classification", "regression"}
 
 
 def recommend(df: pd.DataFrame, problem_type: str, target_column: str | None = None) -> dict:
     n_rows = len(df)
-    if problem_type != "classification":
+    if problem_type not in SUPERVISED_PROBLEM_TYPES:
         return {
             "applicable": False,
             "test_size": None,
@@ -25,8 +26,10 @@ def recommend(df: pd.DataFrame, problem_type: str, target_column: str | None = N
     else:
         test_size, reason = 0.2, f"{n_rows} rows is large enough for a standard 80/20 split."
 
+    # Stratifying only makes sense for a discrete/class target — a continuous regression
+    # target has no "classes" to keep proportional between train and test.
     stratify = False
-    if target_column and target_column in df.columns:
+    if problem_type == "classification" and target_column and target_column in df.columns:
         stratify = df[target_column].nunique(dropna=True) <= max(20, int(n_rows * 0.05))
 
     return {

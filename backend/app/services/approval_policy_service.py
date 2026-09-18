@@ -31,6 +31,15 @@ def _cleaning_plan_risk(decision: dict) -> str | None:
     no_info_cols = [r["column"] for r in recs if r.get("no_information")]
     if no_info_cols:
         return f"column(s) with no usable information (100% missing): {', '.join(no_info_cols)}."
+    # A column flagged for dropping specifically because of leakage risk is the moment the
+    # *action* (discard a potentially strong, legitimate predictor) actually happens — the
+    # Data Validation stage already flagged the correlation itself, but the human should
+    # still get a say on whether dropping it is the right call, since a false-positive
+    # leakage flag (a feature that's just very predictive, not actually leaked) silently
+    # dropped here can badly hurt model quality with no further checkpoint downstream.
+    leakage_drop_cols = [r["column"] for r in recs if r["action"] == "drop_column" and "leakage" in r.get("issue", "")]
+    if leakage_drop_cols:
+        return f"column(s) recommended for removal due to potential data leakage: {', '.join(leakage_drop_cols)}."
     target_missing = decision.get("target_missing")
     if target_missing and (target_missing.get("missing_pct") or 0) > CLEANING_TARGET_MISSING_ESCALATE_PCT:
         return f"a large share of rows ({target_missing['missing_pct']}%) are missing a target value."

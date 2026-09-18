@@ -20,8 +20,10 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 
 from app.core.config import MODELS_DIR
-from app.plugins.registry import get_classification_plugin
+from app.plugins.registry import get_classification_plugin, get_regression_plugin
 from app.services import explainability_service, preprocessing_service
+
+_PLUGIN_LOOKUP = {"classification": get_classification_plugin, "regression": get_regression_plugin}
 
 SCALERS = {"standard": StandardScaler, "minmax": MinMaxScaler, "robust": RobustScaler}
 
@@ -77,10 +79,11 @@ def build_and_persist(
     algorithm: str,
     params: dict,
     pipeline_run_id: str,
+    problem_type: str = "classification",
 ) -> dict:
     """Refits `algorithm`(`params`) on the full dataset and persists a ChampionPipeline.
     Returns {model_path, feature_schema, feature_importance}."""
-    plugin = get_classification_plugin(algorithm)
+    plugin = _PLUGIN_LOOKUP[problem_type](algorithm)
     column_actions: dict = plan.get("column_actions") or {}
 
     # Same as preprocessing_service.split_target: a missing target can't be filled or
@@ -141,7 +144,10 @@ def build_and_persist(
     estimator = plugin.build_model(params)
     estimator.fit(X, y.values)
 
-    target_classes = sorted(y.dropna().unique().tolist(), key=str)
+    # Meaningless (and wastefully large) for a continuous regression target — a classifier's
+    # small set of class labels drives the Prediction Playground's probability breakdown,
+    # which doesn't apply to a numeric prediction.
+    target_classes = sorted(y.dropna().unique().tolist(), key=str) if problem_type == "classification" else []
 
     pipeline = ChampionPipeline(
         numerical_columns=numerical_columns,

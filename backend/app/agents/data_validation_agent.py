@@ -63,6 +63,11 @@ def validate(df: pd.DataFrame, profile: dict, target_column: str | None = None, 
                     f"Every row has the same '{target_column}' outcome ({non_null.iloc[0]!r}) — there's nothing for a "
                     "classification model to learn to distinguish between."
                 )
+            elif problem_type == "regression" and n_distinct < 2:
+                status, detail = "critical", (
+                    f"Every row has the same '{target_column}' value ({non_null.iloc[0]!r}) — there's no variation for a "
+                    "regression model to learn to predict."
+                )
             else:
                 status, detail = "ok", f"'{target_column}' has {n_distinct} distinct value(s) — valid to train against."
             checks.append({"name": "Target column validity", "status": status, "detail": detail, "affected_columns": [] if status == "ok" else [target_column]})

@@ -56,7 +56,11 @@ from app.agents import (
     transformation_agent,
 )
 
-SUPPORTED_PROBLEM_TYPES = {"clustering", "classification"}  # regression is a later phase
+SUPPORTED_PROBLEM_TYPES = {"clustering", "classification", "regression"}
+# Both classification and regression are "supervised" for the purposes of every stage that
+# branches on "does this need a train/test split / HPO / a champion model" — clustering is
+# the only path with no target and no held-out evaluation set.
+SUPERVISED_PROBLEM_TYPES = {"classification", "regression"}
 
 
 def _proposal(decision) -> dict:
@@ -165,7 +169,7 @@ def advance_after_problem_approval(pipeline_run_id: str) -> None:
             run.status = "failed"
             run.error_message = (
                 f"Problem type '{problem_type}' was confirmed, but this build only executes the "
-                f"{sorted(SUPPORTED_PROBLEM_TYPES)} paths end-to-end (regression is a later phase)."
+                f"{sorted(SUPPORTED_PROBLEM_TYPES)} paths end-to-end."
             )
             db.commit()
             return
@@ -288,7 +292,7 @@ def advance_after_transformation_approval(pipeline_run_id: str) -> None:
         df = pd.read_csv(dataset.storage_path)
 
         split = split_agent.recommend(df, run.problem_type, target_column=run.declared_target)
-        applicable = run.problem_type == "classification"
+        applicable = run.problem_type in SUPERVISED_PROBLEM_TYPES
         decision_row = _decide(
             db, run, agent_name="train_test_split", stage="train_test_split", decision=split,
             confidence=0.8 if applicable else 1.0, reasoning=split_agent.summarize(split),
@@ -396,7 +400,7 @@ def advance_after_algorithm_approval(pipeline_run_id: str) -> None:
             auto_approve=True,
         )
 
-        if run.problem_type == "classification":
+        if run.problem_type in SUPERVISED_PROBLEM_TYPES:
             run.status = "hyperparameter_optimization"
             db.commit()
             _run_hpo(db, run, job, plan_fields)
@@ -423,16 +427,24 @@ def advance_after_algorithm_approval(pipeline_run_id: str) -> None:
         db.close()
 
 
+_HPO_KEY_METRIC = {"classification": "f1_macro", "regression": "r2"}
+
+
 def _run_hpo(db, run: PipelineRunORM, job: JobORM, plan_fields: dict) -> None:
     dataset = db.get(DatasetORM, run.dataset_id)
     df = pd.read_csv(dataset.storage_path)
     X_train, X_test, y_train, y_test, _report = preprocessing_service.split_target(
-        df, run.declared_target, plan_fields, test_size=job.test_size or 0.2, stratify=True,
+        df, run.declared_target, plan_fields, test_size=job.test_size or 0.2,
+        stratify=(run.problem_type == "classification"),
     )
     algorithms = sorted({r.algorithm for r in job.runs})
+    key_metric = _HPO_KEY_METRIC[run.problem_type]
     results = []
     for algorithm in algorithms:
-        result = hpo_service.optimize(algorithm, X_train.values, y_train.values, X_test.values, y_test.values, job.config_json)
+        result = hpo_service.optimize(
+            algorithm, X_train.values, y_train.values, X_test.values, y_test.values, job.config_json,
+            problem_type=run.problem_type,
+        )
         results.append({k: v for k, v in result.items() if k != "run"})
         if result.get("skipped"):
             continue
@@ -444,8 +456,8 @@ def _run_hpo(db, run: PipelineRunORM, job: JobORM, plan_fields: dict) -> None:
     db.commit()
 
     reasoning = "; ".join(
-        f"{r['algorithm']}: baseline f1={r.get('baseline_metrics', {}).get('f1_macro')} -> "
-        f"optimized f1={r.get('optimized_metrics', {}).get('f1_macro')} ({r.get('n_trials', 0)} trial(s))"
+        f"{r['algorithm']}: baseline {key_metric}={r.get('baseline_metrics', {}).get(key_metric)} -> "
+        f"optimized {key_metric}={r.get('optimized_metrics', {}).get(key_metric)} ({r.get('n_trials', 0)} trial(s))"
         for r in results if not r.get("skipped")
     ) or "No algorithms had a registered search space."
     _decide(
@@ -490,8 +502,9 @@ def _record_evaluation_summary(db, run: PipelineRunORM, job: JobORM) -> None:
 
 def finalize_after_recommendation_approval(pipeline_run_id: str) -> None:
     """Stage 11-12: persist the approved champion as a reloadable prediction pipeline
-    (classification only — unlocks the Prediction Playground/Explainability), then the
-    Reporting Agent compiles the full decision trail into a business report."""
+    (classification/regression only — unlocks the Prediction Playground/Explainability;
+    clustering has no "predict a new row" concept), then the Reporting Agent compiles the
+    full decision trail into a business report."""
     db = SessionLocal()
     try:
         run = db.get(PipelineRunORM, pipeline_run_id)
@@ -502,7 +515,7 @@ def finalize_after_recommendation_approval(pipeline_run_id: str) -> None:
         recommendation = _proposal(recommendation_decision)
         top = recommendation["top_choice"]
 
-        if run.problem_type == "classification":
+        if run.problem_type in SUPERVISED_PROBLEM_TYPES:
             dataset = db.get(DatasetORM, run.dataset_id)
             df = pd.read_csv(dataset.storage_path)
             cleaning_decision = agent_decision_service.latest_decision(db, pipeline_run_id, "cleaning_plan")
@@ -513,6 +526,7 @@ def finalize_after_recommendation_approval(pipeline_run_id: str) -> None:
             champion_run = db.get(ModelRunORM, top["cluster_run_id"])
             built = champion_service.build_and_persist(
                 df, plan_fields, run.declared_target, champion_run.algorithm, champion_run.params_json, run.id,
+                problem_type=run.problem_type,
             )
             run.champion_model_path = built["model_path"]
             run.champion_run_id = champion_run.id

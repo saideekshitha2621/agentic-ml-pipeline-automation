@@ -65,4 +65,14 @@ DEFAULT_CLASSIFICATION_HYPERPARAMETER_CONFIG = {
     "knn": {"n_neighbors": [3, 5, 7]},
 }
 
+# Same shape/purpose as its classification counterpart above, keyed by the regression
+# plugin registry's algorithm names.
+DEFAULT_REGRESSION_HYPERPARAMETER_CONFIG = {
+    "linear_regression": {"alpha": [0.1, 1.0, 10.0]},
+    "random_forest": {"n_estimators": [100, 200], "max_depth": [None, 10]},
+    "gradient_boosting": {"n_estimators": [100], "learning_rate": [0.05, 0.1]},
+    "svr": {"C": [1.0, 10.0]},
+    "knn": {"n_neighbors": [3, 5, 7]},
+}
+
 RANDOM_STATE = 42

@@ -10,11 +10,18 @@ map) instead of a single dataset-wide strategy.
 """
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 ID_LIKE_UNIQUENESS_THRESHOLD = 0.95
 HIGH_MISSING_ROW_DROP_THRESHOLD = 50.0  # % missing above which dropping affected rows beats imputing
 FULLY_MISSING_OPTIONS = ["drop_column", "fill_zero", "fill_custom", "business_rule"]
+_ID_NAME_PATTERN = re.compile(r"(^id$|_id$|^id_|uuid|guid|^key$|_key$|^code$|_code$)", re.IGNORECASE)
+
+
+def _looks_like_identifier_name(col: str) -> bool:
+    return bool(_ID_NAME_PATTERN.search(col))
 
 
 def _missing_stats(series: pd.Series, n_rows: int) -> tuple[int, float]:
@@ -29,13 +36,22 @@ def propose(df: pd.DataFrame, validation_result: dict, target_column: str | None
     high_card_cols = set(checks_by_name.get("High-cardinality columns", {}).get("affected_columns", []))
 
     n_rows = len(df) or 1
-    # Float columns are excluded from the id-like check — continuous measurements (sensor
-    # readings, prices, scores) are often naturally all-unique in a small sample without
-    # being identifiers, unlike high-uniqueness ints/strings (customer_id, order_id).
-    id_like = {
-        c for c in df.columns
-        if not pd.api.types.is_float_dtype(df[c]) and df[c].nunique(dropna=True) / n_rows > ID_LIKE_UNIQUENESS_THRESHOLD
-    }
+    # Float columns are excluded outright — continuous measurements (sensor readings,
+    # prices, scores) are often naturally all-unique without being identifiers. A
+    # high-cardinality *integer* column is genuinely ambiguous (customer_id vs. sqft/
+    # age_in_days/price_in_cents all look identical by uniqueness alone), so it's only
+    # treated as id-like when its name also looks like one — otherwise a legitimate,
+    # often highly-predictive numeric feature gets silently dropped from modeling (this
+    # is exactly what happened to a regression target's most important feature).
+    id_like = set()
+    for c in df.columns:
+        if pd.api.types.is_float_dtype(df[c]):
+            continue
+        if df[c].nunique(dropna=True) / n_rows <= ID_LIKE_UNIQUENESS_THRESHOLD:
+            continue
+        if pd.api.types.is_integer_dtype(df[c]) and not _looks_like_identifier_name(c):
+            continue
+        id_like.add(c)
 
     recommendations: list[dict] = []
     target_missing_note: dict | None = None

@@ -27,6 +27,14 @@ METRIC_SPECS: dict[str, dict[str, bool]] = {
         "f1_macro": False,
         "accuracy": False,
     },
+    # rmse/mae are lower-is-better (inverted); r2 is higher-is-better. mape is left out of
+    # the composite for the same reason roc_auc/log_loss are left out of classification —
+    # it's undefined when a true value is 0, which would drop the whole run via dropna().
+    "regression": {
+        "rmse": True,
+        "mae": True,
+        "r2": False,
+    },
 }
 
 
@@ -163,8 +171,31 @@ def _explain_classification(row: pd.Series) -> str:
     return f"{row['algorithm']} ({row['params']}) ranked #{int(row['rank'])}: " + "; ".join(reasons) + "."
 
 
+def _explain_regression(row: pd.Series) -> str:
+    reasons = []
+    r2 = row.get("r2")
+    rmse = row.get("rmse")
+    mae = row.get("mae")
+
+    if r2 is not None:
+        if r2 > 0.8:
+            reasons.append(f"explains most of the variance in the target (R²={r2:.3f})")
+        elif r2 > 0.5:
+            reasons.append(f"explains a moderate share of the variance in the target (R²={r2:.3f})")
+        else:
+            reasons.append(f"explains little of the variance in the target (R²={r2:.3f})")
+    if rmse is not None:
+        reasons.append(f"typical prediction error (RMSE) of {rmse:.3f}")
+    if mae is not None:
+        reasons.append(f"average absolute error (MAE) of {mae:.3f}")
+
+    return f"{row['algorithm']} ({row['params']}) ranked #{int(row['rank'])}: " + "; ".join(reasons) + "."
+
+
 def explain_ranking(row: pd.Series, problem_type: str = "clustering") -> str:
     """Human-readable rationale for why a model ranked where it did."""
     if problem_type == "classification":
         return _explain_classification(row)
+    if problem_type == "regression":
+        return _explain_regression(row)
     return _explain_clustering(row)

@@ -15,7 +15,7 @@ from app.db.models import Job as JobORM
 from app.db.models import ModelRun as ModelRunORM
 from app.services import business_language_service, ranking_service, recommendation_service
 
-_KEY_METRIC_BY_PROBLEM_TYPE = {"classification": "f1_macro", "clustering": "silhouette_score"}
+_KEY_METRIC_BY_PROBLEM_TYPE = {"classification": "f1_macro", "clustering": "silhouette_score", "regression": "r2"}
 
 NEAR_TIE_COMPOSITE_DELTA = 0.05
 
@@ -66,11 +66,12 @@ def build_recommendation(job: JobORM, db: Session) -> dict:
         # labels_path holds cluster labels for clustering runs, predicted classes for
         # classification runs — either way, "the per-row output array this run produced".
         outputs = np.load(run.labels_path)
-        breakdown = (
-            recommendation_service.cluster_size_breakdown(outputs)
-            if run.problem_type == "clustering"
-            else recommendation_service.prediction_class_breakdown(outputs)
-        )
+        if run.problem_type == "clustering":
+            breakdown = recommendation_service.cluster_size_breakdown(outputs)
+        elif run.problem_type == "regression":
+            breakdown = recommendation_service.prediction_stats_breakdown(outputs)
+        else:
+            breakdown = recommendation_service.prediction_class_breakdown(outputs)
         key_metric = _KEY_METRIC_BY_PROBLEM_TYPE.get(run.problem_type)
         key_metric_sentence = business_language_service.metric_sentence(
             key_metric, run_dict.get(key_metric), run.problem_type

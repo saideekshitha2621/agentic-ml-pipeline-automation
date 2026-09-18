@@ -27,6 +27,7 @@ from app.services import (
     pca_service,
     preprocessing_service,
     ranking_service,
+    regression_service,
 )
 
 
@@ -220,9 +221,86 @@ def _run_classification(db, job: Job, df: pd.DataFrame, plan: dict, job_dir: Pat
     db.commit()
 
 
+def _run_regression(db, job: Job, df: pd.DataFrame, plan: dict, job_dir: Path, log) -> None:
+    if not job.target_column:
+        job.status = "failed"
+        job.error_message = "No target_column set on this job — regression needs a target to predict."
+        db.commit()
+        return
+
+    log(5, "Splitting into train/test (leakage-safe)...")
+    # stratify=False — a continuous target has no classes to stratify by.
+    X_train, X_test, y_train, y_test, split_report = preprocessing_service.split_target(
+        df, job.target_column, plan, test_size=job.test_size or 0.2, stratify=False
+    )
+    X_train.to_csv(job_dir / "train_features.csv", index=False)
+    X_test.to_csv(job_dir / "test_features.csv", index=False)
+
+    log(15, "Running regression algorithms...")
+
+    def progress_cb(pct: float, message: str):
+        log(15 + pct * 0.7, message)
+
+    def on_algorithm_status(name: str, status: str):
+        job.training_status_json = {**job.training_status_json, name: status}
+        db.commit()
+
+    plugin_runs = regression_service.run_all(
+        X_train.values, y_train.values, X_test.values, job.config_json, progress_cb=progress_cb,
+        algorithms=job.selected_algorithms or None, on_algorithm_status=on_algorithm_status,
+    )
+    if not plugin_runs:
+        job.status = "failed"
+        job.error_message = "No algorithm produced a usable model for this data."
+        db.commit()
+        return
+
+    log(88, f"Evaluating {len(plugin_runs)} regression run(s)...")
+    run_pred_dir = PREDICTIONS_DIR / job.id
+    run_pred_dir.mkdir(parents=True, exist_ok=True)
+
+    evaluated_rows = []
+    orm_runs = []
+    y_test_values = y_test.values
+    for i, run in enumerate(plugin_runs):
+        metrics = evaluation_service.evaluate_regression(y_test_values, run)
+        preds_path = run_pred_dir / f"{i}.npy"
+        np.save(preds_path, np.asarray(run.y_pred, dtype=float))
+
+        orm_run = ModelRun(
+            job_id=job.id,
+            problem_type="regression",
+            algorithm=run.algorithm,
+            params_json=run.params,
+            extra_json=run.extra,
+            labels_path=str(preds_path),  # reused as "the per-row output array this run produced"
+            metrics_json=metrics,
+            artifacts_json={"predictions_path": str(preds_path)},
+        )
+        db.add(orm_run)
+        orm_runs.append(orm_run)
+        evaluated_rows.append({"run_id": i, "algorithm": run.algorithm, "params": run.params, **metrics})
+    db.flush()
+
+    log(94, "Ranking models...")
+    leaderboard = ranking_service.rank(evaluated_rows, problem_type="regression")
+    rank_by_index = {int(r["run_id"]): r for r in leaderboard.to_dict("records")}
+    for i, orm_run in enumerate(orm_runs):
+        lb_row = rank_by_index.get(i)
+        if lb_row:
+            orm_run.composite_score = lb_row.get("composite_score")
+            orm_run.rank = lb_row.get("rank")
+
+    job.status = "completed"
+    job.progress_pct = 100.0
+    job.log_lines = job.log_lines + ["Job completed."]
+    db.commit()
+
+
 _RUNNERS = {
     "clustering": _run_clustering,
     "classification": _run_classification,
+    "regression": _run_regression,
 }
 
 

@@ -228,6 +228,7 @@ def build_report(
     prediction_type = (
         "Binary Classification" if pipeline_run.problem_type == "classification" else
         "Clustering / Segmentation" if pipeline_run.problem_type == "clustering" else
+        "Regression (numeric prediction)" if pipeline_run.problem_type == "regression" else
         pipeline_run.problem_type
     )
 
