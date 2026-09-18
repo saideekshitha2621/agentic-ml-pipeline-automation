@@ -57,7 +57,7 @@ from app.services import (
     preprocessing_service,
 )
 from app.agents import (
-    algorithm_shortlist_agent,
+    algorithm_selection_llm,
     business_framing_agent,
     cleaning_plan_agent,
     data_profiling_agent,
@@ -344,7 +344,8 @@ def after_transformation_node(state: PipelineState) -> dict:
 
 
 def algorithm_shortlist_node(state: PipelineState) -> dict:
-    """Stage 7: Algorithm Shortlist Agent, then pause for HITL 6 unless auto-approved."""
+    """Stage 7: Algorithm Shortlist Agent (LLM-driven, deterministic fallback), then pause
+    for HITL 6 unless auto-approved."""
     pipeline_run_id = state["pipeline_run_id"]
     db = SessionLocal()
     try:
@@ -355,10 +356,13 @@ def algorithm_shortlist_node(state: PipelineState) -> dict:
         df = pd.read_csv(dataset.storage_path)
         profile = data_profiling_agent.analyze(df, dataset.profile_json)
 
-        shortlist = algorithm_shortlist_agent.recommend(profile, run.problem_type)
+        validation_decision = agent_decision_service.latest_decision(db, pipeline_run_id, "data_validation")
+        validation = _proposal(validation_decision) if validation_decision else None
+
+        shortlist = algorithm_selection_llm.recommend(profile, validation, run.problem_type, df, run.declared_target)
         decision_row = _decide(
             db, run, agent_name="algorithm_recommendation", stage="algorithm_recommendation", decision=shortlist,
-            confidence=0.8, reasoning=algorithm_shortlist_agent.summarize(shortlist), auto_approve=None,
+            confidence=0.8, reasoning=algorithm_selection_llm.summarize(shortlist), auto_approve=None,
         )
         if decision_row.status == "approved":
             db.commit()
