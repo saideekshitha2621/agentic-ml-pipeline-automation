@@ -22,7 +22,7 @@ _SYSTEM_EXPLAIN = (
     "'Sure' or 'Here is'. Be concrete: cite the numbers given."
 )
 
-_DEFAULT_MODELS = {"anthropic": ANTHROPIC_MODEL, "gemini": "gemini-2.0-flash", "openai": "gpt-4o-mini"}
+_DEFAULT_MODELS = {"anthropic": ANTHROPIC_MODEL, "gemini": "gemini-3.6-flash", "openai": "gpt-4o-mini"}
 
 
 def _active_config() -> dict | None:
@@ -61,6 +61,14 @@ def _call_gemini(api_key: str, model: str, system: str, messages: list[dict], ma
     response = chat.send_message(
         messages[-1]["content"], generation_config={"max_output_tokens": max_tokens}
     )
+    # Gemini's newer models spend part of max_output_tokens on internal reasoning before
+    # the visible answer — finish_reason 1 is STOP (a complete answer); anything else
+    # (2 = MAX_TOKENS, hit before finishing) means what came back, if anything, is a
+    # mid-sentence fragment. Raise instead of returning it, so the caller's fallback
+    # template is used rather than silently showing garbled, truncated text.
+    finish_reason = response.candidates[0].finish_reason if response.candidates else None
+    if finish_reason is not None and int(finish_reason) != 1:
+        raise RuntimeError(f"Gemini response did not finish cleanly (finish_reason={finish_reason}); discarding partial output.")
     return (response.text or "").strip()
 
 
@@ -88,7 +96,9 @@ def explain(kind: str, context: dict, fallback: str) -> str:
         text = call(
             config["provider"], config["api_key"], config["model"], _SYSTEM_EXPLAIN,
             [{"role": "user", "content": f"Stage: {kind}\nStructured data: {context}\n\nExplain this decision."}],
-            max_tokens=220,
+            # Generous budget — some providers' newer models spend part of this on internal
+            # reasoning before the visible answer, so a tight limit risks truncation.
+            max_tokens=1024,
         )
         return text or fallback
     except Exception:
@@ -114,6 +124,6 @@ def chat(question: str, grounding_context: str, history: list[dict]) -> str:
             f"=== Pipeline run context ===\n{grounding_context}"
         )
         messages = [*history, {"role": "user", "content": question}]
-        return call(config["provider"], config["api_key"], config["model"], system, messages, max_tokens=600)
+        return call(config["provider"], config["api_key"], config["model"], system, messages, max_tokens=1200)
     except Exception as exc:  # noqa: BLE001
         return f"Sorry, the chat model call failed: {exc}"

@@ -6,10 +6,18 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 BACKEND_DIR = Path(__file__).resolve().parents[2]
 REPO_ROOT = BACKEND_DIR.parent
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))  # makes `import ml_automation` work
+
+# Without this, setting a value in backend/.env does nothing — os.environ.get() below would
+# just see whatever was already in the process environment when the server started. This
+# loads backend/.env into os.environ (if present) before anything reads from it; an
+# already-set real environment variable still takes precedence (override=False, the default).
+load_dotenv(BACKEND_DIR / ".env")
 
 STORAGE_DIR = BACKEND_DIR / "app" / "storage"
 DATASETS_DIR = STORAGE_DIR / "datasets"
