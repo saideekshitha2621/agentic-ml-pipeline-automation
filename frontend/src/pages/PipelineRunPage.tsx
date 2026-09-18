@@ -228,7 +228,20 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
 
   const isProblemDetection = decision.agent_name === "problem_detection";
   const proposedType = decision.decision_json.problem_type as string | undefined;
+  const proposedTargetColumn = decision.decision_json.target_column as string | null | undefined;
+  const targetCandidates = (decision.decision_json.target_candidates ?? []) as {
+    column: string;
+    score: number;
+    problem_type: string;
+    reasoning: string[];
+  }[];
   const [overrideType, setOverrideType] = useState(proposedType ?? "clustering");
+  const [overrideTargetColumn, setOverrideTargetColumn] = useState<string | null | undefined>(proposedTargetColumn);
+
+  const selectCandidate = (candidate: { column: string; problem_type: string }) => {
+    setOverrideTargetColumn(candidate.column);
+    setOverrideType(candidate.problem_type);
+  };
 
   return (
     <Paper variant="outlined" sx={{ p: 3, borderColor: "warning.main" }}>
@@ -262,9 +275,32 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
         sx={{ mb: 2, minWidth: 260 }}
       />
 
+      {isProblemDetection && targetCandidates.length > 0 && (
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="body2" gutterBottom>
+            Target column candidates (ranked by name pattern, cardinality, data type, and position):
+          </Typography>
+          <Stack spacing={0.5}>
+            {targetCandidates.map((c) => (
+              <Tooltip key={c.column} title={c.reasoning.join(" ")}>
+                <Chip
+                  label={`${c.column} — ${c.problem_type} (score ${c.score})`}
+                  size="small"
+                  variant={overrideTargetColumn === c.column ? "filled" : "outlined"}
+                  color={overrideTargetColumn === c.column ? "primary" : "default"}
+                  onClick={() => selectCandidate(c)}
+                  sx={{ justifyContent: "flex-start", maxWidth: 460 }}
+                />
+              </Tooltip>
+            ))}
+          </Stack>
+        </Box>
+      )}
       {isProblemDetection && (
         <Stack direction="row" spacing={1} sx={{ mb: 2, alignItems: "center" }}>
-          <Typography variant="body2">Override problem type:</Typography>
+          <Typography variant="body2">
+            Problem type{overrideTargetColumn ? ` for "${overrideTargetColumn}"` : ""}:
+          </Typography>
           {["clustering", "classification", "regression"].map((t) => (
             <Chip
               key={t}
@@ -296,17 +332,24 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
         {isProblemDetection && (
           <Button
             variant="outlined"
-            disabled={review.isPending || !reviewedBy || overrideType === proposedType}
+            disabled={
+              review.isPending ||
+              !reviewedBy ||
+              (overrideType === proposedType && overrideTargetColumn === proposedTargetColumn)
+            }
             onClick={() =>
               review.mutate({
                 decisionId: decision.id,
                 action: "edit",
-                edits: { problem_type: overrideType, target_column: overrideType === "clustering" ? null : decision.decision_json.target_column },
+                edits: {
+                  problem_type: overrideType,
+                  target_column: overrideType === "clustering" ? null : overrideTargetColumn,
+                },
                 reviewed_by: reviewedBy,
               })
             }
           >
-            Override to "{overrideType}"
+            Confirm "{overrideType}"{overrideType !== "clustering" && overrideTargetColumn ? ` on "${overrideTargetColumn}"` : ""}
           </Button>
         )}
         {pendingEdits && (
