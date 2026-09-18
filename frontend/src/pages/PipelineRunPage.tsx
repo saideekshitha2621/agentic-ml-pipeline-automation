@@ -22,9 +22,10 @@ import {
   TableHead,
   TableRow,
   TextField,
+  Tooltip,
   Typography,
 } from "@mui/material";
-import { CheckCircle, Edit, HourglassEmpty, Cancel, SmartToy, Science } from "@mui/icons-material";
+import { CheckCircle, Edit, HourglassEmpty, Cancel, SmartToy, Science, Person, Bolt } from "@mui/icons-material";
 import {
   pipelineReportExportUrl,
   useExecutiveSummary,
@@ -62,6 +63,37 @@ function StatusIcon({ status }: { status: string }) {
   if (status === "edited") return <Edit fontSize="small" color="info" />;
   if (status === "rejected") return <Cancel fontSize="small" color="error" />;
   return <HourglassEmpty fontSize="small" color="warning" />;
+}
+
+/** Clearly distinguishes stages the agent auto-approved (approved_by === "system") from
+ * ones a human actually reviewed and approved/edited — the core UI requirement for the
+ * confidence-based auto-approval policy in services/approval_policy_service.py. */
+function ApprovalBadge({ decision }: { decision: AgentDecision }) {
+  if (decision.status === "proposed") return null;
+  const reason = decision.decision_json.approval_reason as string | undefined;
+  if (decision.status === "rejected") {
+    return <Chip size="small" color="error" label={`Rejected by ${decision.approved_by}`} />;
+  }
+  if (decision.approved_by === "system") {
+    return (
+      <Tooltip title={reason ?? ""}>
+        <Chip size="small" icon={<Bolt fontSize="small" />} color="info" variant="outlined" label="Auto Approved" />
+      </Tooltip>
+    );
+  }
+  if (decision.approved_by) {
+    return (
+      <Tooltip title={reason ?? ""}>
+        <Chip
+          size="small"
+          icon={<Person fontSize="small" />}
+          color="success"
+          label={decision.status === "edited" ? `Human Edited by ${decision.approved_by}` : `Human Approved by ${decision.approved_by}`}
+        />
+      </Tooltip>
+    );
+  }
+  return null;
 }
 
 function StageSummary({ decision }: { decision: AgentDecision }) {
@@ -377,7 +409,12 @@ export default function PipelineRunPage() {
           const isActive = i === activeIndex;
           return (
             <Step key={stage.status} completed={i < activeIndex || run.status === "completed"}>
-              <StepLabel error={run.status === "failed" && isActive}>{stage.label}</StepLabel>
+              <StepLabel
+                error={run.status === "failed" && isActive}
+                optional={decision && decision.status !== "proposed" ? <ApprovalBadge decision={decision} /> : undefined}
+              >
+                {stage.label}
+              </StepLabel>
               <Box sx={{ pl: 2, pb: 2 }}>
                 {stage.status === "training" && isActive && run.status === "training" && (
                   <TrainingProgressContent progress={trainingProgress} />
@@ -410,9 +447,10 @@ export default function PipelineRunPage() {
             <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
               <StatusIcon status={d.status} />
               <Box sx={{ flexGrow: 1 }}>
-                <Stack direction="row" spacing={1} sx={{ alignItems: "center" }}>
+                <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
                   <Typography variant="subtitle2">{d.agent_name.replace(/_/g, " ")}</Typography>
-                  <Chip size="small" label={d.status} color={STATUS_COLOR[d.status]} />
+                  {d.status === "proposed" && <Chip size="small" label="Awaiting review" color={STATUS_COLOR[d.status]} />}
+                  <ApprovalBadge decision={d} />
                   {d.confidence !== null && (
                     <Typography variant="caption" color="text.secondary">
                       confidence {Math.round(d.confidence * 100)}%
@@ -430,9 +468,9 @@ export default function PipelineRunPage() {
                     Override reason: {d.override_reason}
                   </Typography>
                 )}
-                {d.approved_by && (
-                  <Typography variant="caption" color="text.secondary">
-                    {d.status} by {d.approved_by}
+                {(d.decision_json.approval_reason as string | undefined) && (
+                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5, fontStyle: "italic" }}>
+                    {d.decision_json.approval_reason as string}
                   </Typography>
                 )}
               </Box>

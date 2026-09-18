@@ -33,6 +33,7 @@ from app.db.models import PipelineRun as PipelineRunORM
 from app.db.models import PreprocessingPlanORM
 from app.services import (
     agent_decision_service,
+    approval_policy_service,
     business_language_service,
     champion_service,
     error_translation_service,
@@ -62,15 +63,48 @@ def _proposal(decision) -> dict:
     return decision.human_edits_json if decision.status == "edited" else decision.decision_json
 
 
-def _decide(db, run, *, agent_name: str, stage: str, decision: dict, confidence, reasoning: str, auto_approve: bool = False):
+def _decide(db, run, *, agent_name: str, stage: str, decision: dict, confidence, reasoning: str, auto_approve: bool | None = False):
     """Every AgentDecision in this pipeline passes through here so each one carries a
-    `business_impact` sentence (requirement: explain what/why/business impact per stage)
-    without every individual agent module needing to know about business framing."""
-    decision = {**decision, "business_impact": business_language_service.business_impact_for_stage(stage, decision)}
+    `business_impact` sentence and an `approval_reason` — the audit trail for why a stage
+    was auto-approved or sent for human review.
+
+    `auto_approve`:
+      - True  -> always informational, recorded automatically (e.g. profiling, evaluation).
+      - False -> always mandatory human review (problem_detection, recommendation) —
+                 these two carry outsized, hard-to-undo business consequences.
+      - None  -> policy-driven (`approval_policy_service`): auto-approves when confidence
+                 is high and no critical risk is detected in what was just proposed,
+                 otherwise pauses for review with a recorded reason.
+    """
+    if auto_approve is None:
+        auto_approve, approval_reason = approval_policy_service.decide(stage, decision, confidence)
+    elif auto_approve is False:
+        approval_reason = approval_policy_service.mandatory_reason()
+    else:
+        approval_reason = "Informational — recorded automatically, no approval needed."
+    decision = {
+        **decision,
+        "business_impact": business_language_service.business_impact_for_stage(stage, decision),
+        "approval_reason": approval_reason,
+    }
     return agent_decision_service.record_decision(
         db, run, agent_name=agent_name, stage=stage, decision=decision,
         confidence=confidence, reasoning=reasoning, auto_approve=auto_approve,
     )
+
+
+def _advance_or_wait(db, run, decision_row, awaiting_status: str, next_fn) -> None:
+    """Call right after `_decide(..., auto_approve=None)` for a conditionally-gated stage:
+    if the policy auto-approved it, immediately continue to the next stage within this same
+    background-task invocation instead of pausing — this is what makes a high-confidence,
+    low-risk stage actually skip the HITL wait rather than merely being *eligible* to.
+    Otherwise, pause and record the awaiting-approval status as before."""
+    if decision_row.status == "approved":
+        db.commit()
+        next_fn(run.id)
+    else:
+        run.status = awaiting_status
+        db.commit()
 
 
 def _fail(db, pipeline_run_id: str, exc: Exception) -> None:
@@ -152,9 +186,13 @@ def advance_after_problem_approval(pipeline_run_id: str) -> None:
         validation = data_validation_agent.validate(
             df, profile, target_column=run.declared_target, problem_type=run.problem_type
         )
-        _decide(
+        # Real confidence, not a flat constant — a clean validation is high-confidence,
+        # critical findings are low-confidence, both feeding directly into whether this
+        # stage can auto-approve (see approval_policy_service.decide).
+        validation_confidence = {"ok": 0.95, "warning": 0.6, "critical": 0.25}.get(validation["overall_status"], 0.5)
+        decision_row = _decide(
             db, run, agent_name="data_validation", stage="data_validation", decision=validation,
-            confidence=1.0, reasoning=data_validation_agent.summarize(validation), auto_approve=False,
+            confidence=validation_confidence, reasoning=data_validation_agent.summarize(validation), auto_approve=None,
         )
 
         # "Dataset size" and "Target column validity" are hard blockers — there is no
@@ -171,8 +209,7 @@ def advance_after_problem_approval(pipeline_run_id: str) -> None:
             db.commit()
             return
 
-        run.status = "awaiting_validation_approval"
-        db.commit()
+        _advance_or_wait(db, run, decision_row, "awaiting_validation_approval", advance_after_validation_approval)
     except Exception as exc:  # noqa: BLE001
         _fail(db, pipeline_run_id, exc)
         raise
@@ -194,12 +231,16 @@ def advance_after_validation_approval(pipeline_run_id: str) -> None:
         validation_result = _proposal(validation_decision)
 
         plan = cleaning_plan_agent.propose(df, validation_result, target_column=run.declared_target)
-        _decide(
+        # High confidence by default (the rules are deterministic and explainable); lower
+        # when the plan itself signals real risk, so the policy can decide whether to pause.
+        no_information_cols = [r for r in plan["recommendations"] if r.get("no_information")]
+        drop_row_cols = [r for r in plan["recommendations"] if r["action"] == "drop_rows"]
+        cleaning_confidence = 0.5 if no_information_cols else 0.7 if drop_row_cols else 0.9
+        decision_row = _decide(
             db, run, agent_name="cleaning_plan", stage="cleaning_plan", decision=plan,
-            confidence=0.75, reasoning=cleaning_plan_agent.summarize(plan), auto_approve=False,
+            confidence=cleaning_confidence, reasoning=cleaning_plan_agent.summarize(plan), auto_approve=None,
         )
-        run.status = "awaiting_cleaning_approval"
-        db.commit()
+        _advance_or_wait(db, run, decision_row, "awaiting_cleaning_approval", advance_after_cleaning_approval)
     except Exception as exc:  # noqa: BLE001
         _fail(db, pipeline_run_id, exc)
         raise
@@ -222,12 +263,11 @@ def advance_after_cleaning_approval(pipeline_run_id: str) -> None:
         plan_fields = cleaning_plan_agent.to_preprocessing_plan_fields(cleaning_plan)
 
         transformation = transformation_agent.propose(df, plan_fields)
-        _decide(
+        decision_row = _decide(
             db, run, agent_name="transformation", stage="transformation", decision=transformation,
-            confidence=0.8, reasoning=transformation_agent.summarize(transformation), auto_approve=False,
+            confidence=0.8, reasoning=transformation_agent.summarize(transformation), auto_approve=None,
         )
-        run.status = "awaiting_transformation_approval"
-        db.commit()
+        _advance_or_wait(db, run, decision_row, "awaiting_transformation_approval", advance_after_transformation_approval)
     except Exception as exc:  # noqa: BLE001
         _fail(db, pipeline_run_id, exc)
         raise
@@ -249,14 +289,13 @@ def advance_after_transformation_approval(pipeline_run_id: str) -> None:
 
         split = split_agent.recommend(df, run.problem_type, target_column=run.declared_target)
         applicable = run.problem_type == "classification"
-        _decide(
+        decision_row = _decide(
             db, run, agent_name="train_test_split", stage="train_test_split", decision=split,
             confidence=0.8 if applicable else 1.0, reasoning=split_agent.summarize(split),
-            auto_approve=not applicable,
+            auto_approve=None if applicable else True,
         )
         if applicable:
-            run.status = "awaiting_split_approval"
-            db.commit()
+            _advance_or_wait(db, run, decision_row, "awaiting_split_approval", advance_after_split_approval)
         else:
             db.commit()
             _advance_to_algorithm_shortlist(db, run)
@@ -288,12 +327,11 @@ def _advance_to_algorithm_shortlist(db, run: PipelineRunORM) -> None:
     profile = data_profiling_agent.analyze(df, dataset.profile_json)
 
     shortlist = algorithm_shortlist_agent.recommend(profile, run.problem_type)
-    _decide(
+    decision_row = _decide(
         db, run, agent_name="algorithm_recommendation", stage="algorithm_recommendation", decision=shortlist,
-        confidence=0.7, reasoning=algorithm_shortlist_agent.summarize(shortlist), auto_approve=False,
+        confidence=0.8, reasoning=algorithm_shortlist_agent.summarize(shortlist), auto_approve=None,
     )
-    run.status = "awaiting_algorithm_approval"
-    db.commit()
+    _advance_or_wait(db, run, decision_row, "awaiting_algorithm_approval", advance_after_algorithm_approval)
 
 
 def advance_after_algorithm_approval(pipeline_run_id: str) -> None:

@@ -150,10 +150,17 @@ def validate(df: pd.DataFrame, profile: dict, target_column: str | None = None, 
     )
 
     leakage_cols: list[str] = []
-    if target_column and target_column in df.columns and pd.api.types.is_numeric_dtype(df[target_column]):
+    if target_column and target_column in df.columns:
         numeric_cols = df.select_dtypes(include="number").columns.drop(target_column, errors="ignore")
         if len(numeric_cols):
-            corr = df[numeric_cols].corrwith(df[target_column]).abs()
+            # Label-encode a categorical target (the common case for classification — most
+            # targets are "yes"/"no"/class-name strings, not numbers) so the same correlation
+            # check applies; a numeric target is already usable as-is.
+            target_series = (
+                df[target_column] if pd.api.types.is_numeric_dtype(df[target_column])
+                else df[target_column].astype("category").cat.codes.replace(-1, pd.NA)
+            )
+            corr = df[numeric_cols].corrwith(target_series).abs()
             leakage_cols = corr[corr > LEAKAGE_CORR_THRESHOLD].index.tolist()
     checks.append(
         {
