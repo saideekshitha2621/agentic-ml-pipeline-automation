@@ -65,7 +65,7 @@ export default function NavShell({ children }: { children: ReactNode }) {
       <AppBar position="fixed" sx={{ zIndex: (t) => t.zIndex.drawer + 1 }}>
         <Toolbar>
           <Typography variant="h6" noWrap component="div">
-            Unsupervised AutoML Platform
+            AI Decision Engine
           </Typography>
         </Toolbar>
       </AppBar>
