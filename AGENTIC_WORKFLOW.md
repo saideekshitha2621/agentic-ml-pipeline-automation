@@ -1,7 +1,7 @@
 # Agentic ML Pipeline — Workflow & Progress Report
 
-Implementation status: **Phases 1 and 2 complete, Phase 3 mostly complete, Phases 4 and 5 pending.**
-Backend test suite: 80 passing (63 pre-existing + 17 new in `backend/tests/test_agentic_loops.py`).
+Implementation status: **Phases 1, 2 and 3 complete; Phases 4 and 5 pending** (one Phase 5 item, LLM rate-limit guardrails, was pulled forward).
+Backend test suite: 87 passing (63 pre-existing + 24 new in `backend/tests/test_agentic_loops.py`).
 
 ## 1. The agentic workflow
 
@@ -52,19 +52,26 @@ Two loops make it agentic rather than a linear pipeline:
 |---|-------|--------|--------------|
 | 1 | Productive rejection + real confidence | **Done** | Revision loop through LangGraph conditional edges from each revisable gate (`pipeline_graph.py`). `feedback` support in the problem-detection, cleaning, transformation, split and algorithm agents (`feedback_utils.py`). Router re-dispatches instead of failing (`routers/pipeline.py`). Hard-coded confidences replaced by signal-derived scores with a `confidence_factors` audit list. |
 | 2 | Closed loop + critic | **Done** | `quality_check_agent.py` (bounded retry, remedies `broaden_algorithms` then `alternate_scaling`, leakage smell is flagged not retried). `critic_agent.py` (leakage, unresolved weak signal, near-tie, small data, data-quality flags). Critic findings are attached to the recommendation the human reviews. |
-| 3 | Real reasoning + tools | **Mostly done** | Tool-calling loop `llm_service.run_tool_loop` with adapters for **Gemini**, Anthropic and OpenAI. Read-only dataset tools (`dataset_tools.py`: column stats, value counts, outlier report, leakage probe). LLM-with-fallback problem detection and transformation. Algorithm agent takes feedback. Guardrails: the LLM cannot change dtype-derived problem type, cannot repeat a rejected choice, can only lower confidence, and any failure falls back to the deterministic result. |
+| 3 | Real reasoning + tools | **Done** | Tool-calling loop `llm_service.run_tool_loop` with adapters for **Gemini**, Anthropic and OpenAI. Read-only dataset tools (`dataset_tools.py`: column stats, value counts, outlier report, leakage probe). LLM-with-fallback problem detection and transformation. Algorithm agent takes feedback. Guardrails: the LLM cannot change dtype-derived problem type, cannot repeat a rejected choice, can only lower confidence, and any failure falls back to the deterministic result. |
 | 4 | Capability expansion | Pending | Feature-engineering agent, imbalance handling, adaptive HPO budget, chat that triggers gated actions. |
 | 5 | Productionisation | Pending | Job queue (Celery/RQ), Postgres, object storage, auth, drift/monitoring agent, cross-run memory, agent-quality eval harness. |
 
-### Pending inside Phase 3
-* Cleaning-plan agent is still rules-only (its per-column action schema needs stricter LLM output validation).
-* Evaluation and recommendation agents are still rules-only; the critic's narrative is the only LLM text there.
-* Tool loop has not been exercised against a live Gemini key in this environment. It is covered with a scripted fake
-  provider, and the Gemini tool declaration is confirmed to be accepted by the installed SDK.
+### Phase 3 additions (latest)
+* `cleaning_plan_llm.py`: the LLM re-chooses the imputation strategy per column from real column statistics
+  (one request, no tool loop). It cannot drop or keep columns, touch leakage/identifier/empty-column rules, or raise
+  confidence. Invalid overrides are ignored; any failure returns the rule-based plan.
+* Recommendation now carries an LLM-written `narrative` (template fallback). The ranking itself stays deterministic,
+  and evaluation stays deterministic by design (metrics should not be LLM-derived).
+* Rate-limit circuit breaker in `llm_service`: after a 429/quota error the LLM is skipped for 5 minutes and every agent
+  uses its fallback (`llm_service.usage_stats()` exposes call/error/trip counts).
+* Live check against Gemini: the call reached the provider and was rejected with 429 (free tier: 20 requests/day per
+  model, already used up). The fallback path was confirmed live. A *successful* tool-loop round trip is still to be
+  confirmed once quota is available.
+* Tests no longer touch the real provider (`tests/conftest.py` blanks the API keys).
 
 ## 3. Using it with Gemini
 
-Set `GEMINI_API_KEY` in the backend environment. Provider order is Anthropic, then Gemini, then OpenAI, so leave
+Set `GEMINI_API_KEY` in the backend environment. Note the free tier (20 requests/day per model) covers only about one full run; use a billing-enabled key or a model with a higher quota for real use. Provider order is Anthropic, then Gemini, then OpenAI, so leave
 the other two keys unset. With no key set, every agent uses its deterministic path and nothing breaks.
 `google-generativeai` (already a dependency) is deprecated upstream; migrating to `google.genai` is a future task.
 

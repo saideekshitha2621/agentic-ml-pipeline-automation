@@ -75,11 +75,69 @@ def _call_gemini(api_key: str, model: str, system: str, messages: list[dict], ma
 _DISPATCH = {"anthropic": _call_anthropic, "openai": _call_openai, "gemini": _call_gemini}
 
 
+# --- Rate-limit circuit breaker ----------------------------------------------------------
+# Free/low-tier keys have small daily quotas (e.g. Gemini free tier: 20 requests/day/model),
+# and every agent already has a deterministic fallback. After a quota/rate-limit error, stop
+# calling the provider for BREAKER_SECONDS instead of paying a failing round-trip per stage.
+import time as _time
+
+BREAKER_SECONDS = 300
+_breaker_until = 0.0
+_stats = {"calls": 0, "errors": 0, "breaker_trips": 0, "skipped_while_open": 0}
+
+
+def _is_rate_limited(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return any(k in text for k in ("429", "quota", "rate limit", "rate_limit", "resource_exhausted", "resource exhausted"))
+
+
+def breaker_open() -> bool:
+    return _time.monotonic() < _breaker_until
+
+
+def _trip_breaker() -> None:
+    global _breaker_until
+    _breaker_until = _time.monotonic() + BREAKER_SECONDS
+    _stats["breaker_trips"] += 1
+
+
+def reset_breaker() -> None:
+    global _breaker_until
+    _breaker_until = 0.0
+
+
+def usage_stats() -> dict:
+    return {**_stats, "breaker_open": breaker_open()}
+
+
+def _guarded(fn, *args, **kwargs):
+    if breaker_open():
+        _stats["skipped_while_open"] += 1
+        raise RuntimeError("LLM temporarily disabled after a rate-limit/quota error; using deterministic fallback.")
+    _stats["calls"] += 1
+    try:
+        return fn(*args, **kwargs)
+    except Exception as exc:  # noqa: BLE001
+        _stats["errors"] += 1
+        if _is_rate_limited(exc):
+            _trip_breaker()
+        raise
+
+
 def call(provider: str, api_key: str, model: str, system: str, messages: list[dict], max_tokens: int = 400) -> str:
     fn = _DISPATCH.get(provider)
     if fn is None:
         raise ValueError(f"Unknown LLM provider '{provider}'.")
-    return fn(api_key, model, system, messages, max_tokens)
+    return _guarded(fn, api_key, model, system, messages, max_tokens)
+
+
+def complete(system: str, user: str, max_tokens: int = 1500) -> str:
+    """Single-shot completion with the active provider; raises ToolLoopUnavailable (defined
+    below) when none is configured, so callers fall back deterministically."""
+    config = _active_config()
+    if config is None:
+        raise ToolLoopUnavailable("no LLM provider configured")
+    return call(config["provider"], config["api_key"], config["model"], system, [{"role": "user", "content": user}], max_tokens)
 
 
 def is_configured() -> bool:
@@ -317,12 +375,14 @@ def run_tool_loop(
     if session_cls is None:
         raise ToolLoopUnavailable(f"provider '{config['provider']}' has no tool-use adapter")
 
+    if breaker_open():
+        raise ToolLoopUnavailable("LLM temporarily disabled after a rate-limit/quota error")
     by_name = {t.name: t for t in tools}
     session = session_cls(config, system, tools, max_tokens)
     session.send_user(user)
     trace: list[dict] = []
     for _ in range(max_steps):
-        text, calls = session.next()
+        text, calls = _guarded(session.next)
         if not calls:
             return ToolLoopResult(text=text, calls=trace)
         results = []

@@ -373,3 +373,107 @@ def test_rejecting_final_recommendation_recommends_next_best_and_can_still_compl
         assert champion.algorithm == second.decision_json["top_choice"]["algorithm"]
     finally:
         db.close()
+
+
+# ---------------- Phase 3 remainder: breaker, cleaning LLM, recommendation narrative -----
+
+def _cleaning_df():
+    import numpy as np
+
+    rng = np.random.default_rng(1)
+    n = 100
+    skewed = rng.exponential(2.0, n)
+    skewed[:10] = float("nan")
+    return pd.DataFrame({
+        "skewed_num": skewed,
+        "cat": (["a", "b", "c", "d"] * 25),
+        "empty": [float("nan")] * n,
+        "y": [0, 1] * 50,
+    }).assign(cat=lambda d: d["cat"].where(d.index >= 5))
+
+
+def test_rate_limit_error_trips_breaker_and_skips_further_calls(monkeypatch):
+    calls = []
+
+    def boom(*a, **k):
+        calls.append(1)
+        raise RuntimeError("429 You exceeded your current quota")
+
+    monkeypatch.setitem(llm_service._DISPATCH, "fake", boom)
+    with pytest.raises(RuntimeError):
+        llm_service.call("fake", "k", "m", "s", [{"role": "user", "content": "x"}])
+    assert llm_service.breaker_open()
+    with pytest.raises(RuntimeError, match="temporarily disabled"):
+        llm_service.call("fake", "k", "m", "s", [{"role": "user", "content": "x"}])
+    assert len(calls) == 1  # second call never reached the provider
+    # explain() degrades to its template instead of raising
+    monkeypatch.setattr(llm_service, "_active_config", lambda: {"provider": "fake", "api_key": "k", "model": "m"})
+    assert llm_service.explain("k", {}, "fallback text") == "fallback text"
+    llm_service.reset_breaker()
+    assert not llm_service.breaker_open()
+
+
+def test_non_quota_errors_do_not_trip_breaker(monkeypatch):
+    monkeypatch.setitem(llm_service._DISPATCH, "fake", lambda *a, **k: (_ for _ in ()).throw(ValueError("bad json")))
+    with pytest.raises(ValueError):
+        llm_service.call("fake", "k", "m", "s", [{"role": "user", "content": "x"}])
+    assert not llm_service.breaker_open()
+
+
+def test_cleaning_llm_overrides_are_validated(monkeypatch):
+    from app.agents import cleaning_plan_llm
+
+    df = _cleaning_df()
+    validation = {"checks": []}
+    base = cleaning_plan_agent.propose(df, validation, "y")
+    base_actions = {r["column"]: r["action"] for r in base["recommendations"]}
+    assert base_actions["empty"] == "drop_column"
+
+    reply = (
+        '{"overrides": ['
+        '{"column": "skewed_num", "action": "fill_zero", "reason": "missing means none"},'
+        '{"column": "empty", "action": "mean", "reason": "trying to un-drop"},'          # not editable
+        '{"column": "cat", "action": "median", "reason": "invalid for categorical"},'   # invalid action
+        '{"column": "ghost", "action": "mean", "reason": "no such column"}'             # unknown column
+        '], "confidence": 0.9}'
+    )
+    monkeypatch.setattr(llm_service, "complete", lambda system, user, max_tokens=0: reply)
+    out = cleaning_plan_llm.propose(df, validation, "y")
+    actions = {r["column"]: r["action"] for r in out["recommendations"]}
+    assert out["source"] == "llm"
+    assert actions["skewed_num"] == "fill_zero"          # valid override applied
+    assert actions["empty"] == "drop_column"             # safety rule untouched
+    assert actions["cat"] == base_actions["cat"]         # invalid action ignored
+    assert [o["column"] for o in out["llm_overrides"]] == ["skewed_num"]
+
+
+def test_cleaning_llm_falls_back_on_failure(monkeypatch):
+    from app.agents import cleaning_plan_llm
+
+    df, validation = _cleaning_df(), {"checks": []}
+    monkeypatch.setattr(llm_service, "complete", lambda *a, **k: "garbage, not json")
+    out = cleaning_plan_llm.propose(df, validation, "y")
+    assert out["source"] == "deterministic" and out["fallback_reason"] == "invalid_json"
+
+    def quota(*a, **k):
+        raise RuntimeError("429 quota")
+
+    monkeypatch.setattr(llm_service, "complete", quota)
+    out = cleaning_plan_llm.propose(df, validation, "y")
+    assert out["source"] == "deterministic" and out["fallback_reason"].startswith("llm_error")
+    # without any provider configured the plan equals the rule-based one
+    monkeypatch.undo()
+    plain = cleaning_plan_agent.propose(df, validation, "y")
+    assert cleaning_plan_llm.propose(df, validation, "y")["recommendations"] == plain["recommendations"]
+
+
+def test_recommendation_carries_narrative_and_critic(dataset_factory):  # noqa: F811
+    run = dataset_factory(_classification_df(), "churn")
+    db = SessionLocal()
+    try:
+        orchestrator.start(run.id)
+        run = _drive_until(db, run.id, "awaiting_recommendation_approval")
+        rec = agent_decision_service.latest_decision(db, run.id, "recommendation").decision_json
+        assert rec["narrative"] and "critic" in rec  # narrative falls back to the rationale when no LLM
+    finally:
+        db.close()

@@ -63,6 +63,7 @@ from app.services import (
     evaluation_service,
     hpo_service,
     job_runner_service,
+    llm_service,
     metric_glossary,
     preprocessing_service,
 )
@@ -70,6 +71,7 @@ from app.agents import (
     algorithm_selection_llm,
     business_framing_agent,
     cleaning_plan_agent,
+    cleaning_plan_llm,
     data_profiling_agent,
     data_validation_agent,
     critic_agent,
@@ -319,13 +321,15 @@ def after_validation_node(state: PipelineState) -> dict:
         validation_decision = agent_decision_service.latest_decision(db, pipeline_run_id, "data_validation")
         validation_result = _proposal(validation_decision)
 
-        plan = cleaning_plan_agent.propose(
+        plan = cleaning_plan_llm.propose(
             df, validation_result, target_column=run.declared_target,
             feedback=_feedback(db, pipeline_run_id, "cleaning_plan"),
         )
         # Confidence is derived from what the plan contains (risky actions lower it), so the
         # policy's auto-approve-vs-pause decision reflects the actual proposal.
         cleaning_confidence, factors = cleaning_plan_agent.estimate_confidence(plan, len(df.columns))
+        if plan.get("source") == "llm":  # the LLM may lower confidence, never raise it
+            cleaning_confidence = round(min(cleaning_confidence, plan["llm_confidence"]), 2)
         plan = {**plan, "confidence_factors": factors}
         decision_row = _decide(
             db, run, agent_name="cleaning_plan", stage="cleaning_plan", decision=plan,
@@ -708,6 +712,18 @@ def recommend_node(state: PipelineState) -> dict:
         )
 
         top = recommendation["top_choice"]
+        recommendation["narrative"] = llm_service.explain(
+            "model_recommendation",
+            {
+                "recommended": {k: top.get(k) for k in ("algorithm", "rank", "composite_score", "strengths", "weaknesses")},
+                "alternatives": [
+                    {k: a.get(k) for k in ("algorithm", "rank", "composite_score", "why_not_chosen")}
+                    for a in recommendation["alternatives"]
+                ],
+                "critic_verdict": review["verdict"],
+            },
+            fallback=top["rationale"],
+        )
         confidence = 0.85 if recommendation["confidence"] == "high" else 0.5
         if review["verdict"] == "serious_concerns":
             confidence = min(confidence, 0.4)
