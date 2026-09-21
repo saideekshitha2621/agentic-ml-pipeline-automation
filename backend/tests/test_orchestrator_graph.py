@@ -77,15 +77,16 @@ def dataset_factory(tmp_path):
         run = db.get(PipelineRunORM, run_id)
         if run:
             db.query(AgentDecisionORM).filter_by(pipeline_run_id=run_id).delete()
-            if run.job_id:
-                job = db.get(JobORM, run.job_id)
-                if job:
-                    db.query(ModelRunORM).filter_by(job_id=job.id).delete()
-                    if job.preprocessing_plan_id:
-                        plan = db.get(PreprocessingPlanORM, job.preprocessing_plan_id)
-                        if plan:
-                            db.delete(plan)
-                    db.delete(job)
+            run.job_id = None  # a self-correcting run owns several jobs, not just the last one
+            db.commit()
+            for job in db.query(JobORM).filter_by(dataset_id=dataset_id).all():
+                db.query(ModelRunORM).filter_by(job_id=job.id).delete()
+                plan_id = job.preprocessing_plan_id
+                db.delete(job)
+                db.flush()
+                plan = db.get(PreprocessingPlanORM, plan_id) if plan_id else None
+                if plan:
+                    db.delete(plan)
             db.delete(run)
         dataset = db.get(DatasetORM, dataset_id)
         if dataset:
@@ -163,11 +164,15 @@ def test_classification_run_walks_every_gate_with_no_duplicate_decisions(dataset
         assert run.status == "completed", run.error_message
 
         counts = _decision_counts(db, run.id)
-        assert all(c == 1 for c in counts.values()), counts
+        # The self-correction loop legitimately repeats training-side decisions; every other
+        # agent must still appear exactly once (the replay-duplication regression guard).
+        loop_agents = {"quality_check", "model_selection", "hyperparameter_optimization", "evaluation"}
+        assert all(c == 1 for a, c in counts.items() if a not in loop_agents), counts
         for expected_agent in (
             "data_profiling", "problem_detection", "business_framing", "data_validation",
             "cleaning_plan", "transformation", "train_test_split", "algorithm_recommendation",
-            "model_selection", "hyperparameter_optimization", "evaluation", "recommendation", "reporting",
+            "model_selection", "hyperparameter_optimization", "evaluation", "quality_check", "critic",
+            "recommendation", "reporting",
         ):
             assert expected_agent in counts, f"missing decision for {expected_agent}"
     finally:

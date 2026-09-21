@@ -146,9 +146,25 @@ def _decision(
     return decision
 
 
-def detect(df: pd.DataFrame, profile: dict, declared_target: str | None = None) -> dict:
+def detect(
+    df: pd.DataFrame, profile: dict, declared_target: str | None = None, feedback: list[dict] | None = None
+) -> dict:
+    """`feedback` (Phase 1 revision loop): earlier proposals a human rejected. Every
+    previously-proposed target is excluded from this pass, so a rejection moves the
+    proposal to the next-ranked candidate (or to clustering when none remain) instead of
+    re-proposing the same answer."""
     roles = profile.get("column_roles", {})
     columns = list(df.columns)
+
+    rejected_targets = {f["proposal"].get("target_column") for f in feedback or [] if f.get("proposal")}
+    rejected_targets.discard(None)
+    if declared_target in rejected_targets:
+        declared_target = None  # the reviewer already rejected this one
+    revision_note = (
+        [f"Revised after {len(feedback)} rejection(s) — excluding previously proposed target(s): "
+         f"{sorted(rejected_targets) or 'none (clustering was rejected)'}."]
+        if feedback else []
+    )
 
     if declared_target:
         if declared_target not in columns:
@@ -166,13 +182,17 @@ def detect(df: pd.DataFrame, profile: dict, declared_target: str | None = None) 
             [f"User declared '{declared_target}' as the prediction target.", reason],
         )
 
-    candidates = [c for c in columns if roles.get(c, {}).get("role") not in ("id_like", "free_text", "datetime")]
+    candidates = [
+        c for c in columns
+        if roles.get(c, {}).get("role") not in ("id_like", "free_text", "datetime") and c not in rejected_targets
+    ]
     if not candidates:
         return _decision(
             "clustering",
             None,
-            0.9,
-            ["No target-like column found — every column looks like an identifier, free text, or a timestamp."],
+            0.9 if not feedback else 0.6,
+            [*revision_note, "No target-like column found — every column looks like an identifier, free text, or a timestamp."
+             if not feedback else "No remaining target candidates after the rejection — falling back to clustering."],
         )
 
     ranked = _rank_target_candidates(df, candidates, columns)
@@ -184,6 +204,7 @@ def detect(df: pd.DataFrame, profile: dict, declared_target: str | None = None) 
         top["column"],
         confidence,
         [
+            *revision_note,
             f"No explicit target declared — ranked {len(ranked)} candidate column(s) by name pattern, "
             f"cardinality, data type, and position; '{top['column']}' scored highest.",
             reason,

@@ -29,7 +29,7 @@ import re
 
 import pandas as pd
 
-from app.agents import algorithm_shortlist_agent
+from app.agents import algorithm_shortlist_agent, feedback_utils
 from app.plugins.registry import CLASSIFICATION_PLUGIN_REGISTRY, PLUGIN_REGISTRY, REGRESSION_PLUGIN_REGISTRY
 from app.services import llm_service
 
@@ -137,8 +137,19 @@ def _gather_tool_outputs(profile: dict, validation: dict | None, problem_type: s
 
 # --- Prompt + parsing/validation -----------------------------------------------------------
 
-def _build_user_message(tool_outputs: dict, problem_type: str) -> str:
+def _build_user_message(tool_outputs: dict, problem_type: str, feedback: list[dict] | None = None) -> str:
+    feedback_block = ""
+    if feedback:
+        rejected = "\n".join(
+            f"- Rejected shortlist {f['proposal'].get('selected_algorithms')}: {f.get('reason') or '(no reason given)'}"
+            for f in feedback
+        )
+        feedback_block = (
+            "A human reviewer REJECTED your earlier shortlist(s). Address their reasons in this "
+            f"new shortlist instead of repeating it:\n{rejected}\n\n"
+        )
     return (
+        f"{feedback_block}"
         f"Problem type: {problem_type}\n\n"
         f"Dataset and validation information (from tool calls already run against this dataset):\n"
         f"{json.dumps(tool_outputs, indent=2, default=str)}\n\n"
@@ -184,6 +195,7 @@ def _parse_and_validate(raw_text: str, valid_names: set[str]) -> tuple[dict | No
         ],
         "selected_algorithms": selected_algorithms,
         "llm_reasoning": str(parsed.get("reasoning", "")) or None,
+        "llm_confidence": str(parsed.get("confidence", "")).lower() or None,
     }, None
 
 
@@ -200,7 +212,63 @@ def _fallback(profile: dict, problem_type: str, tool_outputs: dict, reason: str)
     }
 
 
-def recommend(profile: dict, validation: dict | None, problem_type: str, df: pd.DataFrame | None, target_column: str | None) -> dict:
+def _apply_feedback(result: dict, feedback: list[dict] | None, names: list[str]) -> dict:
+    """Guarantees a re-proposal actually reflects the rejection, whether it came from the
+    LLM or the fallback: reviewer-named algorithms are included/excluded, and a shortlist
+    identical to the one just rejected is broadened to every registered algorithm."""
+    if not feedback:
+        return result
+    include, exclude = feedback_utils.include_exclude_names(feedback, names)
+    selected = [n for n in names if (n in result["selected_algorithms"] or n in include) and n not in exclude]
+    note = "Applied your feedback"
+    if include or exclude:
+        note += f" (include {sorted(include) or 'none'}, exclude {sorted(exclude) or 'none'})."
+    last_rejected = set(feedback[-1]["proposal"].get("selected_algorithms", []))
+    if not selected or set(selected) == last_rejected:
+        selected = list(names)
+        note = "Your feedback named no specific algorithms, so the shortlist was broadened to every registered algorithm."
+    shortlist = [{**e, "recommended": e["algorithm"] in selected} for e in result["shortlist"]]
+    return {**result, "shortlist": shortlist, "selected_algorithms": selected, "revision": len(feedback), "revision_note": note}
+
+
+def estimate_confidence(result: dict, validation: dict | None, n_rows: int) -> tuple[float, list[str]]:
+    """LLM-reported confidence when the LLM produced the shortlist, a data-driven baseline
+    otherwise — lowered by data-quality warnings and small samples."""
+    factors: list[str] = []
+    if result.get("source") == "llm":
+        score = {"high": 0.9, "medium": 0.7}.get(result.get("llm_confidence") or "", 0.7)
+        factors.append(f"LLM self-reported '{result.get('llm_confidence')}' confidence -> {score:.2f}")
+    else:
+        score = 0.85
+        factors.append("0.85 baseline for the deterministic size-based shortlist")
+    n_flagged = sum(1 for c in (validation or {}).get("checks", []) if c.get("status") in ("warning", "critical"))
+    if n_flagged >= 2:
+        score -= 0.1
+        factors.append(f"-0.10: {n_flagged} data-quality checks flagged")
+    if n_rows < 200:
+        score -= 0.1
+        factors.append(f"-0.10: only {n_rows} rows")
+    if result.get("revision"):
+        score -= 0.05
+        factors.append("-0.05: re-proposed after a rejection")
+    return round(max(score, 0.3), 2), factors
+
+
+def recommend(
+    profile: dict, validation: dict | None, problem_type: str, df: pd.DataFrame | None, target_column: str | None,
+    feedback: list[dict] | None = None,
+) -> dict:
+    names = list(_REGISTRY_BY_PROBLEM_TYPE.get(problem_type, PLUGIN_REGISTRY))
+    result = _recommend_once(profile, validation, problem_type, df, target_column, feedback)
+    result = _apply_feedback(result, feedback, names)
+    confidence, factors = estimate_confidence(result, validation, len(df) if df is not None else profile.get("n_rows", 0))
+    return {**result, "confidence": confidence, "confidence_factors": factors}
+
+
+def _recommend_once(
+    profile: dict, validation: dict | None, problem_type: str, df: pd.DataFrame | None, target_column: str | None,
+    feedback: list[dict] | None,
+) -> dict:
     tool_outputs = _gather_tool_outputs(profile, validation, problem_type, df, target_column)
     valid_names = set(_REGISTRY_BY_PROBLEM_TYPE.get(problem_type, PLUGIN_REGISTRY))
 
@@ -211,7 +279,7 @@ def recommend(profile: dict, validation: dict | None, problem_type: str, df: pd.
     try:
         raw = llm_service.call(
             config["provider"], config["api_key"], config["model"], _SYSTEM_PROMPT,
-            [{"role": "user", "content": _build_user_message(tool_outputs, problem_type)}],
+            [{"role": "user", "content": _build_user_message(tool_outputs, problem_type, feedback)}],
             max_tokens=1500,
         )
     except Exception as exc:  # noqa: BLE001

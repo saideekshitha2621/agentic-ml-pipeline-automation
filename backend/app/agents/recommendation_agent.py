@@ -13,6 +13,7 @@ from sqlalchemy.orm import Session
 
 from app.db.models import Job as JobORM
 from app.db.models import ModelRun as ModelRunORM
+from app.agents import feedback_utils
 from app.services import business_language_service, ranking_service, recommendation_service
 
 _KEY_METRIC_BY_PROBLEM_TYPE = {"classification": "f1_macro", "clustering": "silhouette_score", "regression": "r2"}
@@ -43,16 +44,35 @@ def _run_dict(run: ModelRunORM) -> dict:
     return base
 
 
-def build_recommendation(job: JobORM, db: Session) -> dict:
-    top_runs = (
+class NoCandidatesLeft(ValueError):
+    """Every ranked algorithm has already been rejected by the reviewer."""
+
+
+def _select_top_runs(ranked: list[ModelRunORM], feedback: list[dict] | None) -> list[ModelRunORM]:
+    """Phase 1 revision loop for the final gate: never re-recommend an algorithm the
+    reviewer rejected as the top choice or excluded by name, and put an algorithm they asked
+    for ("use random_forest") first."""
+    if not feedback:
+        return ranked[:3]
+    rejected = {f["proposal"].get("top_choice", {}).get("algorithm") for f in feedback if f.get("proposal")} - {None}
+    include, exclude = feedback_utils.include_exclude_names(feedback, sorted({r.algorithm for r in ranked}))
+    remaining = [r for r in ranked if r.algorithm not in rejected and r.algorithm not in exclude]
+    remaining.sort(key=lambda r: (r.algorithm not in include, r.rank))  # stable: preferred algorithms first
+    return remaining[:3]
+
+
+def build_recommendation(job: JobORM, db: Session, feedback: list[dict] | None = None) -> dict:
+    ranked = (
         db.query(ModelRunORM)
         .filter(ModelRunORM.job_id == job.id, ModelRunORM.rank.isnot(None))
         .order_by(ModelRunORM.rank)
-        .limit(3)
         .all()
     )
-    if not top_runs:
+    if not ranked:
         raise ValueError("No ranked cluster runs available for this job yet.")
+    top_runs = _select_top_runs(ranked, feedback)
+    if not top_runs:
+        raise NoCandidatesLeft("Every candidate model has already been rejected.")
 
     entries = []
     for run in top_runs:
@@ -113,4 +133,7 @@ def build_recommendation(job: JobORM, db: Session) -> dict:
         if (top_score - second_score) < NEAR_TIE_COMPOSITE_DELTA:
             confidence = "low"
 
-    return {"top_choice": top, "alternatives": alternatives, "confidence": confidence}
+    return {
+        "top_choice": top, "alternatives": alternatives, "confidence": confidence,
+        "revision": len(feedback) if feedback else 0,
+    }

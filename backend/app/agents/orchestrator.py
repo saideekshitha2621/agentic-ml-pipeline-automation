@@ -53,3 +53,9 @@ def advance_after_algorithm_approval(pipeline_run_id: str) -> None:
 
 def finalize_after_recommendation_approval(pipeline_run_id: str) -> None:
     _resume(pipeline_run_id)
+
+
+def revise_after_rejection(pipeline_run_id: str) -> None:
+    """Resumes the paused gate; the gate sees the rejected decision and routes back to the
+    propose node that made it (see `pipeline_graph._make_revisable_gate`)."""
+    _resume(pipeline_run_id)

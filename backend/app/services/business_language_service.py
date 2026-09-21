@@ -32,6 +32,8 @@ _STAGE_BUSINESS_IMPACT = {
     "training": "Builds and compares candidate models so the best-performing option can be chosen with evidence, not guesswork.",
     "hyperparameter_optimization": "Fine-tunes the chosen approach to extract meaningfully better performance without changing the underlying method.",
     "evaluation": "Translates technical performance into a plain measure of how often the model's predictions can be trusted.",
+    "quality_check": "Automatically catches a weak model and retries with a fix before anyone has to spend time reviewing it.",
+    "critic_review": "An independent second opinion that surfaces risks (leakage, weak signal, tiny samples) before the final approval.",
     "recommendation": "Identifies the single model to put into production, backed by a clear trade-off analysis against the alternatives.",
     "reporting": "Summarizes the entire project into a decision-ready document for stakeholders who weren't in the technical weeds.",
 }

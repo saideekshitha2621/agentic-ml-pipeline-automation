@@ -114,6 +114,20 @@ function StageSummary({ decision }: { decision: AgentDecision }) {
       return <HPOContent decision={decision} />;
     case "evaluation":
       return <EvaluationContent decision={decision} />;
+    case "quality_check":
+    case "critic": {
+      const d = decision.decision_json as { verdict?: string; flags?: string[]; findings?: { severity: string; message: string }[] };
+      return (
+        <Stack spacing={0.5}>
+          <Typography variant="body2">{decision.reasoning_text}</Typography>
+          {d.findings?.map((f, i) => (
+            <Typography key={i} variant="caption" color={f.severity === "high" ? "error.main" : "text.secondary"}>
+              [{f.severity}] {f.message}
+            </Typography>
+          ))}
+        </Stack>
+      );
+    }
     default:
       return <Typography variant="body2">{decision.reasoning_text}</Typography>;
   }
@@ -362,14 +376,14 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
           </Button>
         )}
         <Button color="error" disabled={review.isPending || !reviewedBy} onClick={() => setShowReject((s) => !s)}>
-          Reject
+          Reject &amp; revise
         </Button>
       </Stack>
 
       {showReject && (
         <Stack direction="row" spacing={2} sx={{ mt: 2 }}>
           <TextField
-            label="Reason for rejection"
+            label="What should change? (the agent re-proposes using this)"
             size="small"
             fullWidth
             value={reason}
@@ -383,7 +397,7 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
               review.mutate({ decisionId: decision.id, action: "reject", reason, reviewed_by: reviewedBy })
             }
           >
-            Confirm reject
+            Send back to agent
           </Button>
         </Stack>
       )}

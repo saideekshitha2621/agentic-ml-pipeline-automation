@@ -22,6 +22,7 @@ from app.db.models import Job as JobORM
 from app.db.models import PipelineRun as PipelineRunORM
 from app.db.models import PredictionLog as PredictionLogORM
 from app.schemas.pipeline import AgentDecision, DecisionReviewRequest, PipelineRun, PipelineRunCreateRequest
+from app.services import agent_decision_service
 
 router = APIRouter(prefix="/api/v1/pipeline-runs", tags=["pipeline"])
 
@@ -102,6 +103,15 @@ def review_decision(
     db.refresh(decision)
 
     if body.action == "reject":
+        # Phase 1 revision loop: a rejection sends the same agent back to re-propose with
+        # the reviewer's reason as feedback (bounded by MAX_REVISIONS); only when revisions
+        # are exhausted, or the stage isn't revisable, does the run stop.
+        if agent_decision_service.can_revise(db, pipeline_run_id, decision.agent_name):
+            run.status = agent_decision_service.REVISABLE_AGENTS[decision.agent_name]
+            run.error_message = None
+            db.commit()
+            background_tasks.add_task(orchestrator.revise_after_rejection, pipeline_run_id)
+            return decision
         run.status = "failed"
         run.error_message = f"Rejected at stage '{decision.stage}': {body.reason}"
         db.commit()

@@ -14,6 +14,8 @@ import re
 
 import pandas as pd
 
+from app.agents import feedback_utils
+
 ID_LIKE_UNIQUENESS_THRESHOLD = 0.95
 HIGH_MISSING_ROW_DROP_THRESHOLD = 50.0  # % missing above which dropping affected rows beats imputing
 FULLY_MISSING_OPTIONS = ["drop_column", "fill_zero", "fill_custom", "business_rule"]
@@ -29,7 +31,16 @@ def _missing_stats(series: pd.Series, n_rows: int) -> tuple[int, float]:
     return n_missing, round((n_missing / n_rows * 100) if n_rows else 0.0, 2)
 
 
-def propose(df: pd.DataFrame, validation_result: dict, target_column: str | None = None) -> dict:
+def propose(
+    df: pd.DataFrame, validation_result: dict, target_column: str | None = None, feedback: list[dict] | None = None
+) -> dict:
+    """`feedback` (Phase 1 revision loop) switches on a conservative re-plan: columns the
+    reviewer names in their rejection reason are protected from being dropped, leakage-
+    flagged columns are kept (imputed) instead of dropped, and 'drop the affected rows'
+    becomes imputation — the three ways a rejected cleaning plan most often over-reached."""
+    protected = feedback_utils.mentioned_columns(feedback, list(df.columns))
+    conservative = bool(feedback)
+    revision_notes: list[str] = []
     checks_by_name = {c["name"]: c for c in validation_result["checks"]}
     constant_cols = set(checks_by_name.get("Constant columns", {}).get("affected_columns", []))
     leakage_cols = set(checks_by_name.get("Data leakage risk", {}).get("affected_columns", []))
@@ -90,28 +101,37 @@ def propose(df: pd.DataFrame, validation_result: dict, target_column: str | None
             })
             continue
 
-        if col in id_like:
+        if col in id_like and col not in protected:
             recommendations.append({**base, "issue": "identifier-like column", "action": "drop_column",
                                      "reason": f"{df[col].nunique()} nearly-unique values — an identifier carries no predictive signal."})
             continue
-        if col in constant_cols:
+        if col in constant_cols and col not in protected:
             recommendations.append({**base, "issue": "constant column", "action": "drop_column",
                                      "reason": "Every row has the same value — this column can't inform any model."})
             continue
-        if col in leakage_cols:
+        if col in leakage_cols and not conservative and col not in protected:
             recommendations.append({**base, "issue": "data leakage risk", "action": "drop_column",
                                      "reason": "Near-perfect correlation with the target suggests this column leaks the answer."})
             continue
 
         flags = ["high_cardinality"] if col in high_card_cols and column_type == "categorical" else []
+        if col in leakage_cols:
+            flags.append("possible_leakage_kept_after_review")
+            revision_notes.append(f"Kept '{col}' (flagged for possible leakage) after your rejection — verify it is available at prediction time.")
+        elif col in protected:
+            revision_notes.append(f"Kept '{col}' because your rejection reason named it.")
 
         if n_missing == 0:
-            issue = "High cardinality" if flags else "No issues detected."
-            reason = "Consider grouping rare categories or dropping this column before encoding." if flags else "No missing values — no action needed."
+            if "possible_leakage_kept_after_review" in flags:
+                issue = "Possible leakage (kept after review)"
+                reason = "Flagged as a potential leak of the target, but kept because you rejected dropping it — confirm it is known at prediction time."
+            else:
+                issue = "High cardinality" if flags else "No issues detected."
+                reason = "Consider grouping rare categories or dropping this column before encoding." if flags else "No missing values — no action needed."
             recommendations.append({**base, "issue": issue, "action": "keep", "reason": reason, **({"flags": flags} if flags else {})})
             continue
 
-        if missing_pct > HIGH_MISSING_ROW_DROP_THRESHOLD:
+        if missing_pct > HIGH_MISSING_ROW_DROP_THRESHOLD and not conservative:
             action = "drop_rows"
             reason = f"{missing_pct:.0f}% missing — too sparse to impute reliably; dropping the affected rows is safer than inventing values for most of the column."
         elif column_type == "numeric":
@@ -132,7 +152,37 @@ def propose(df: pd.DataFrame, validation_result: dict, target_column: str | None
         "n_duplicates": n_dupes,
         "drop_duplicates": n_dupes > 0,
         "target_missing": target_missing_note,  # informational only — see preprocessing_service.split_target
+        "revision": len(feedback) if feedback else 0,
+        "revision_notes": revision_notes,
     }
+
+
+def estimate_confidence(plan: dict, n_columns: int) -> tuple[float, list[str]]:
+    """Confidence derived from what the plan actually contains rather than a flat constant:
+    every risky action lowers it, feeding straight into the auto-approval policy."""
+    recs = plan["recommendations"]
+    score, factors = 0.95, []
+
+    def penalize(amount: float, why: str) -> None:
+        nonlocal score
+        score -= amount
+        factors.append(f"-{amount:.2f}: {why}")
+
+    if any(r.get("no_information") for r in recs):
+        penalize(0.4, "column(s) with no usable information")
+    if any(r["action"] == "drop_rows" for r in recs):
+        penalize(0.2, "plan drops rows instead of imputing")
+    if any(r["action"] == "drop_column" and "leakage" in r.get("issue", "") for r in recs):
+        penalize(0.15, "plan removes column(s) for suspected leakage")
+    heavy = [r for r in recs if r.get("missing_pct", 0) > 20 and r["action"] in ("mean", "median", "mode")]
+    if heavy:
+        penalize(min(0.05 * len(heavy), 0.2), f"{len(heavy)} column(s) imputed with >20% missing values")
+    dropped = sum(1 for r in recs if r["action"] == "drop_column")
+    if n_columns and dropped / n_columns > 0.3:
+        penalize(0.15, f"{dropped} of {n_columns} columns dropped")
+    if plan.get("revision"):
+        penalize(0.05, "re-proposed after a rejection")
+    return round(max(score, 0.2), 2), factors
 
 
 def summarize(plan: dict) -> str:
