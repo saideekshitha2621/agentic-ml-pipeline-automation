@@ -11,7 +11,7 @@ from app.db.models import ChatMessage as ChatMessageORM
 from app.db.models import Dataset as DatasetORM
 from app.db.models import PipelineRun as PipelineRunORM
 from app.schemas.pipeline import ChatRequest
-from app.services import llm_service
+from app.services import chat_action_service, llm_service
 
 router = APIRouter(prefix="/api/v1/pipeline-runs", tags=["chat"])
 
@@ -63,12 +63,25 @@ def ask_chat(pipeline_run_id: str, body: ChatRequest, db: Session = Depends(get_
     db.add(user_message)
     db.commit()
 
-    context = _build_grounding_context(run, dataset, decisions)
-    answer = llm_service.chat(body.question, context, history)
+    # An instruction ("use random forest instead") becomes a *proposed* action the user must
+    # confirm; it short-circuits the LLM call entirely (no quota used, no hallucinated claims).
+    suggested_action = chat_action_service.detect_action(db, pipeline_run_id, body.question)
+    if suggested_action:
+        answer = suggested_action["description"] + " Confirm below to apply it."
+    else:
+        context = _build_grounding_context(run, dataset, decisions)
+        answer = llm_service.chat(body.question, context, history)
 
     assistant_message = ChatMessageORM(pipeline_run_id=pipeline_run_id, role="assistant", content=answer)
     db.add(assistant_message)
     db.commit()
     db.refresh(assistant_message)
 
-    return assistant_message
+    return {
+        "id": assistant_message.id,
+        "pipeline_run_id": assistant_message.pipeline_run_id,
+        "role": assistant_message.role,
+        "content": assistant_message.content,
+        "created_at": assistant_message.created_at,
+        "suggested_action": suggested_action,
+    }

@@ -45,6 +45,24 @@ _PROBLEM_TYPE_CONFIG = {
 }
 
 
+# --- Adaptive budget (Phase 4) ----------------------------------------------------------
+_KEY_METRIC = {"classification": "f1_macro", "regression": "r2"}
+EARLY_STOP_AT = 0.97  # baseline key metric at/above which searching is wasted compute
+LARGE_ROWS, MEDIUM_ROWS = 50_000, 10_000
+
+
+def plan_budget(n_train_rows: int, n_algorithms: int) -> dict:
+    """Scales the search to the data instead of a fixed cost: big datasets get fewer CV
+    folds and a small random sample of the grid; small ones keep the thorough default."""
+    if n_train_rows > LARGE_ROWS:
+        budget = {"tier": "large", "cv_folds": 3, "n_iter": 6, "force_random": True}
+    elif n_train_rows > MEDIUM_ROWS:
+        budget = {"tier": "medium", "cv_folds": 3, "n_iter": 10, "force_random": False}
+    else:
+        budget = {"tier": "standard", "cv_folds": None, "n_iter": RANDOM_SEARCH_N_ITER, "force_random": False}
+    return {**budget, "early_stop_at": EARLY_STOP_AT, "n_train_rows": n_train_rows, "n_algorithms": n_algorithms}
+
+
 def _grid_size(search_space: dict) -> int:
     size = 1
     for values in search_space.values():
@@ -69,7 +87,9 @@ def optimize(
     y_test: np.ndarray,
     config: dict | None = None,
     problem_type: str = "classification",
+    budget: dict | None = None,
 ) -> dict:
+    budget = budget or plan_budget(len(X_train), 1)
     settings = _PROBLEM_TYPE_CONFIG[problem_type]
     plugin = settings["registry"][algorithm]
     config = config or {}
@@ -78,26 +98,37 @@ def optimize(
         return {"algorithm": algorithm, "skipped": True, "reason": "No hyperparameter search space registered."}
 
     baseline_params = plugin.param_grid({k: v for k, v in search_space.items()})[0]
-    baseline_model = plugin.build_model(baseline_params)
+    build = getattr(plugin, "build_configured", plugin.build_model)  # classification honours class_weight
+    baseline_model = build(baseline_params)
     baseline_model.fit(X_train, y_train)
     baseline_run = _build_run(settings["run_cls"], algorithm, baseline_params, baseline_model, X_test)
     baseline_metrics = settings["evaluate"](y_test, baseline_run)
 
-    cv_folds = 5 if len(X_train) >= 100 else max(2, min(5, len(X_train) // 20 or 2))
+    default_folds = 5 if len(X_train) >= 100 else max(2, min(5, len(X_train) // 20 or 2))
+    cv_folds = min(budget.get("cv_folds") or default_folds, default_folds)
     n_combos = _grid_size(search_space)
-    estimator = plugin.build_model(baseline_params)
+    n_iter = min(budget.get("n_iter") or RANDOM_SEARCH_N_ITER, n_combos)
+
+    key_baseline = baseline_metrics.get(_KEY_METRIC[problem_type])
+    early_stopped = key_baseline is not None and key_baseline >= budget.get("early_stop_at", EARLY_STOP_AT)
+    estimator = build(baseline_params)
     try:
-        if n_combos > RANDOM_SEARCH_THRESHOLD:
-            search = RandomizedSearchCV(
-                estimator, search_space, n_iter=min(RANDOM_SEARCH_N_ITER, n_combos),
-                cv=cv_folds, scoring=settings["scoring"], random_state=RANDOM_STATE, n_jobs=1,
-            )
+        if early_stopped:
+            # No headroom: the default already scores near-perfectly, so a search can only add
+            # cost (and overfitting risk). Keep the baseline and say so in the audit trail.
+            best_model, best_params, n_trials = baseline_model, baseline_params, 1
         else:
-            search = GridSearchCV(estimator, search_space, cv=cv_folds, scoring=settings["scoring"], n_jobs=1)
-        search.fit(X_train, y_train)
-        best_model = search.best_estimator_
-        best_params = search.best_params_
-        n_trials = len(search.cv_results_["params"])
+            if n_combos > RANDOM_SEARCH_THRESHOLD or budget.get("force_random"):
+                search = RandomizedSearchCV(
+                    estimator, search_space, n_iter=n_iter,
+                    cv=cv_folds, scoring=settings["scoring"], random_state=RANDOM_STATE, n_jobs=1,
+                )
+            else:
+                search = GridSearchCV(estimator, search_space, cv=cv_folds, scoring=settings["scoring"], n_jobs=1)
+            search.fit(X_train, y_train)
+            best_model = search.best_estimator_
+            best_params = search.best_params_
+            n_trials = len(search.cv_results_["params"])
     except Exception:
         best_model, best_params, n_trials = baseline_model, baseline_params, 1
 
@@ -113,5 +144,6 @@ def optimize(
         "optimized_metrics": optimized_metrics,
         "n_trials": n_trials,
         "cv_folds": cv_folds,
+        "early_stopped": early_stopped,
         "run": optimized_run,
     }

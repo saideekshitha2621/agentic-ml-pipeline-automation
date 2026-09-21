@@ -1,5 +1,6 @@
-import { Box, Chip, Paper, Skeleton, Stack, Typography } from "@mui/material";
+import { Box, Chip, Paper, Skeleton, Stack, Tooltip, Typography } from "@mui/material";
 import type { ExecutiveSummary } from "../../types";
+import { modelLevelColor } from "../../types";
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
@@ -64,13 +65,20 @@ export default function ExecutiveSummaryCard({ summary }: { summary: ExecutiveSu
           {summary.performance_summary?.headline_metric_sentence ? (
             <>
               <Typography variant="body2">{summary.performance_summary.headline_metric_sentence}</Typography>
-              {summary.performance_summary.confidence && (
-                <Chip
-                  size="small"
-                  sx={{ mt: 0.5 }}
-                  color={summary.performance_summary.confidence === "high" ? "success" : "warning"}
-                  label={`${summary.performance_summary.confidence} confidence`}
-                />
+              {summary.performance_summary.level && summary.performance_summary.level !== "Unknown" && (
+                <Tooltip title={summary.performance_summary.explanation ?? ""}>
+                  <Chip
+                    size="small"
+                    sx={{ mt: 0.5 }}
+                    color={modelLevelColor(summary.performance_summary.level)}
+                    label={summary.performance_summary.level === "Verify" ? "Verify result" : `${summary.performance_summary.level} performance`}
+                  />
+                </Tooltip>
+              )}
+              {summary.performance_summary.tie_note && (
+                <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5 }}>
+                  {summary.performance_summary.tie_note}
+                </Typography>
               )}
             </>
           ) : (

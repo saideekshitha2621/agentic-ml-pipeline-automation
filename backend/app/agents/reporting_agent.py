@@ -21,6 +21,7 @@ from app.db.models import AgentDecision as AgentDecisionORM
 from app.db.models import Dataset as DatasetORM
 from app.db.models import Job as JobORM
 from app.db.models import PipelineRun as PipelineRunORM
+from app.services import model_assessment_service
 
 _IMPUTE_ACTION_LABELS = {"mean": "Mean Imputation", "median": "Median Imputation", "mode": "Mode Imputation"}
 
@@ -124,22 +125,22 @@ def _model_selection_summary(model_selection: AgentDecisionORM | None, hpo: Agen
     }
 
 
-def _model_performance(evaluation: AgentDecisionORM | None, recommendation: AgentDecisionORM | None) -> dict:
-    business_metrics = _effective(evaluation).get("business_metrics", {})
-    confidence = _effective(recommendation).get("confidence")
-    confidence_level = {"high": "High", "low": "Moderate"}.get(confidence, "Not yet available")
-    confidence_explanation = (
-        "The model demonstrates strong predictive capability and is suitable for business decision support."
-        if confidence == "high"
-        else "The model shows reasonable predictive capability, but results were close between the top candidates "
-        "— consider a pilot rollout before full deployment."
-        if confidence == "low"
-        else "Confidence will be available once a model has been recommended."
-    )
+def _model_performance(
+    evaluation: AgentDecisionORM | None, recommendation: AgentDecisionORM | None, problem_type: str | None = None
+) -> dict:
+    """Quality rating comes from the model's actual held-out score (see model_assessment_service);
+    the top-two-models-are-close signal is reported separately and never as "low confidence"."""
+    evaluation_data = _effective(evaluation)
+    business_metrics = evaluation_data.get("business_metrics", {})
+    near_tie = _effective(recommendation).get("confidence") == "low"
+    assessment = model_assessment_service.assess(problem_type, evaluation_data.get("metrics"), near_tie)
+    explanation = assessment["explanation"] + (f" {assessment['tie_note']}" if assessment["tie_note"] else "")
     return {
         "reliability_sentence": next(iter(business_metrics.values()), None),
-        "confidence_level": confidence_level,
-        "confidence_explanation": confidence_explanation,
+        "confidence_level": assessment["level"],
+        "confidence_explanation": explanation,
+        "key_metric": assessment["metric"],
+        "key_metric_value": assessment["value"],
     }
 
 
@@ -251,7 +252,7 @@ def build_report(
         "data_quality_summary": _data_quality_summary(validation, cleaning, profiling),
         "data_preparation_summary": data_preparation_summary,
         "model_selection_summary": model_selection_summary,
-        "model_performance": _model_performance(evaluation, recommendation),
+        "model_performance": _model_performance(evaluation, recommendation, pipeline_run.problem_type),
         "key_insights": _key_insights(recommendation, validation),
         "prediction_capability": {
             "description": framing_data.get("prediction_objective"),
@@ -274,6 +275,16 @@ def build_report(
         },
         "final_outcome": pipeline_run.status,
     }
+
+
+def _format_metric(value) -> str:
+    """Nested metrics (the confusion matrix) as readable text instead of a raw Python dict."""
+    if isinstance(value, dict) and "labels" in value and "matrix" in value:
+        labels = [str(l) for l in value["labels"]]
+        rows = "; ".join(f"actual {labels[i]} -> " + ", ".join(f"{labels[j]}: {c}" for j, c in enumerate(row))
+                         for i, row in enumerate(value["matrix"]))
+        return f"(actual -> predicted) {rows}"
+    return str(value)
 
 
 def _table(rows: list[list[str]]) -> Table:
@@ -394,7 +405,7 @@ def export_pdf(report: dict, out_path: Path) -> Path:
     ta = report["technical_appendix"]
     if ta["model_details"]:
         heading("Model Details")
-        story.append(_table([["Metric", "Value"]] + [[k, str(v)] for k, v in ta["model_details"].items()]))
+        story.append(_table([["Metric", "Value"]] + [[k, _format_metric(v)] for k, v in ta["model_details"].items()]))
         story.append(Spacer(1, 10))
     if ta["hyperparameters"]:
         heading("Hyperparameters")

@@ -182,20 +182,70 @@ export function HPOContent({ decision }: { decision: AgentDecision }) {
   );
 }
 
+interface ConfusionMatrix {
+  labels: string[];
+  matrix: number[][];
+}
+
+export function isConfusionMatrix(v: unknown): v is ConfusionMatrix {
+  const m = v as ConfusionMatrix | null;
+  return !!m && Array.isArray(m.labels) && Array.isArray(m.matrix);
+}
+
+/** Actual (rows) vs predicted (columns); the diagonal is what the model got right. */
+export function ConfusionMatrixTable({ cm }: { cm: ConfusionMatrix }) {
+  return (
+    <Box>
+      <Typography variant="caption" color="text.secondary">
+        Confusion matrix — rows are the actual outcome, columns are what the model predicted (diagonal = correct)
+      </Typography>
+      <Table size="small" sx={{ width: "auto", mt: 0.5 }}>
+        <TableHead>
+          <TableRow>
+            <TableCell sx={{ fontWeight: 600 }}>Actual \ Predicted</TableCell>
+            {cm.labels.map((l) => (
+              <TableCell key={l} align="right" sx={{ fontWeight: 600 }}>{l}</TableCell>
+            ))}
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {cm.matrix.map((row, i) => (
+            <TableRow key={cm.labels[i]}>
+              <TableCell sx={{ fontWeight: 600 }}>{cm.labels[i]}</TableCell>
+              {row.map((count, j) => (
+                <TableCell
+                  key={j}
+                  align="right"
+                  sx={{ bgcolor: i === j ? "success.light" : count > 0 ? "error.light" : undefined, color: i === j || count > 0 ? "common.black" : undefined }}
+                >
+                  {count}
+                </TableCell>
+              ))}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </Box>
+  );
+}
+
 export function EvaluationContent({ decision }: { decision: AgentDecision }) {
-  const e = decision.decision_json as { champion_algorithm?: string; metrics?: Record<string, number>; glossary?: Record<string, string> };
+  const e = decision.decision_json as { champion_algorithm?: string; metrics?: Record<string, unknown>; glossary?: Record<string, string> };
+  const metrics = e.metrics ?? {};
+  const confusion = isConfusionMatrix(metrics.confusion_matrix) ? metrics.confusion_matrix : null;
   return (
     <Stack spacing={1}>
       <Typography variant="body2"><b>Top model so far:</b> {e.champion_algorithm?.replace(/_/g, " ")}</Typography>
       <Stack direction="row" spacing={1} sx={{ flexWrap: "wrap" }}>
-        {Object.entries(e.metrics ?? {}).map(([k, v]) =>
-          v == null ? null : (
+        {Object.entries(metrics).map(([k, v]) =>
+          typeof v === "number" || typeof v === "string" ? (
             <Tooltip key={k} title={e.glossary?.[k] ?? ""}>
               <Chip label={`${k}: ${typeof v === "number" ? v.toFixed(3) : v}`} />
             </Tooltip>
-          )
+          ) : null
         )}
       </Stack>
+      {confusion && <ConfusionMatrixTable cm={confusion} />}
     </Stack>
   );
 }

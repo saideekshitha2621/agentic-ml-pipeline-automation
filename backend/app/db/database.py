@@ -5,7 +5,12 @@ from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
 
 from app.core.config import DATABASE_URL
 
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+_IS_SQLITE = DATABASE_URL.startswith("sqlite")
+engine = (
+    create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+    if _IS_SQLITE
+    else create_engine(DATABASE_URL, pool_pre_ping=True, pool_size=10, max_overflow=10)
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -49,6 +54,8 @@ def _ensure_columns():
                 if column.name in existing:
                     continue
                 col_type = _SQLITE_COLUMN_TYPES.get(column.type.__class__.__name__.upper(), "TEXT")
+                if not _IS_SQLITE and col_type == "DATETIME":
+                    col_type = "TIMESTAMP"  # PostgreSQL has no DATETIME type
                 default_sql = ""
                 if column.default is not None and getattr(column.default, "is_scalar", False):
                     val = column.default.arg

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -8,13 +8,14 @@ from app.db.models import Dataset as DatasetORM
 from app.db.models import Job as JobORM
 from app.db.models import PreprocessingPlanORM
 from app.schemas.job import Job, JobCreateRequest
+from app.services import task_queue_service
 from app.services.job_runner_service import run_job
 
 router = APIRouter(prefix="/api/v1/jobs", tags=["jobs"])
 
 
 @router.post("", response_model=Job)
-def create_job(body: JobCreateRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+def create_job(body: JobCreateRequest, db: Session = Depends(get_db)):
     dataset = db.get(DatasetORM, body.dataset_id)
     if not dataset:
         raise HTTPException(404, "Dataset not found.")
@@ -33,7 +34,7 @@ def create_job(body: JobCreateRequest, background_tasks: BackgroundTasks, db: Se
     db.commit()
     db.refresh(job)
 
-    background_tasks.add_task(run_job, job.id)
+    task_queue_service.submit(run_job, job.id, key=job.id)
     return job
 
 

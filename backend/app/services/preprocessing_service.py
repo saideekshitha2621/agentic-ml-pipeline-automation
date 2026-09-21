@@ -11,6 +11,7 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 
 from app.core.config import RANDOM_STATE
+from app.services import feature_engineering_service
 
 SCALERS = {
     "standard": StandardScaler,
@@ -207,6 +208,10 @@ def split_target(
     n_missing_target = int(df[target_column].isna().sum())
     if n_missing_target:
         df = df.dropna(subset=[target_column]).reset_index(drop=True)
+
+    # Stateless feature engineering (log1p on skewed columns) — safe before the split since
+    # it has no fitted state to leak; mirrored in champion_service for the refit + prediction.
+    df = feature_engineering_service.apply(df, plan.get("feature_transforms"))
 
     column_actions: dict = plan.get("column_actions") or {}
     drop_rows_cols = [c for c, a in column_actions.items() if a.get("action") == "drop_rows" and c in df.columns and c != target_column]

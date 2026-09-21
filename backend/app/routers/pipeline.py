@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -22,7 +22,7 @@ from app.db.models import Job as JobORM
 from app.db.models import PipelineRun as PipelineRunORM
 from app.db.models import PredictionLog as PredictionLogORM
 from app.schemas.pipeline import AgentDecision, DecisionReviewRequest, PipelineRun, PipelineRunCreateRequest
-from app.services import agent_decision_service
+from app.services import agent_decision_service, model_assessment_service, task_queue_service
 
 router = APIRouter(prefix="/api/v1/pipeline-runs", tags=["pipeline"])
 
@@ -36,7 +36,7 @@ def _get_run_or_404(pipeline_run_id: str, db: Session) -> PipelineRunORM:
 
 @router.post("", response_model=PipelineRun)
 def create_pipeline_run(
-    body: PipelineRunCreateRequest, background_tasks: BackgroundTasks, db: Session = Depends(get_db)
+    body: PipelineRunCreateRequest, db: Session = Depends(get_db)
 ):
     dataset = db.get(DatasetORM, body.dataset_id)
     if not dataset:
@@ -47,7 +47,7 @@ def create_pipeline_run(
     db.commit()
     db.refresh(run)
 
-    background_tasks.add_task(orchestrator.start, run.id)
+    task_queue_service.submit(orchestrator.start, run.id, key=run.id)
     return run
 
 
@@ -72,7 +72,6 @@ def review_decision(
     pipeline_run_id: str,
     decision_id: str,
     body: DecisionReviewRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
 ):
     run = _get_run_or_404(pipeline_run_id, db)
@@ -110,7 +109,7 @@ def review_decision(
             run.status = agent_decision_service.REVISABLE_AGENTS[decision.agent_name]
             run.error_message = None
             db.commit()
-            background_tasks.add_task(orchestrator.revise_after_rejection, pipeline_run_id)
+            task_queue_service.submit(orchestrator.revise_after_rejection, pipeline_run_id, key=pipeline_run_id)
             return decision
         run.status = "failed"
         run.error_message = f"Rejected at stage '{decision.stage}': {body.reason}"
@@ -128,7 +127,7 @@ def review_decision(
     }
     next_step = _DISPATCH.get(decision.agent_name)
     if next_step:
-        background_tasks.add_task(next_step, pipeline_run_id)
+        task_queue_service.submit(next_step, pipeline_run_id, key=pipeline_run_id)
 
     return decision
 
@@ -148,7 +147,7 @@ def executive_summary(pipeline_run_id: str, db: Session = Depends(get_db)):
     """Read-only, computed on the fly from existing AgentDecision rows — no new storage.
     Each field is null until its stage has run, so the summary is meaningful from the
     first stage onward rather than only appearing once the run completes."""
-    _get_run_or_404(pipeline_run_id, db)
+    run = _get_run_or_404(pipeline_run_id, db)
 
     def _latest(agent_name: str) -> AgentDecisionORM | None:
         return (
@@ -195,9 +194,15 @@ def executive_summary(pipeline_run_id: str, db: Session = Depends(get_db)):
     performance_summary = None
     if evaluation:
         business_metrics = evaluation.decision_json.get("business_metrics", {})
+        near_tie = bool(recommendation) and recommendation.decision_json.get("confidence") == "low"
+        assessment = model_assessment_service.assess(run.problem_type, evaluation.decision_json.get("metrics"), near_tie)
         performance_summary = {
             "headline_metric_sentence": next(iter(business_metrics.values()), None),
-            "confidence": recommendation.decision_json.get("confidence") if recommendation else None,
+            # honest quality rating (Strong/Good/Fair/Weak/Verify) instead of the ranking-tie flag
+            "level": assessment["level"],
+            "explanation": assessment["explanation"],
+            "tie_note": assessment["tie_note"],
+            "confidence": recommendation.decision_json.get("confidence") if recommendation else None,  # legacy: ranking closeness
         }
 
     return {

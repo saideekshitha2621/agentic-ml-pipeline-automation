@@ -24,8 +24,11 @@ _SYSTEM = (
 )
 
 
-def propose(df: pd.DataFrame, plan_fields: dict, feedback: list[dict] | None = None) -> dict:
-    base = transformation_agent.propose(df, plan_fields, feedback)
+def propose(
+    df: pd.DataFrame, plan_fields: dict, feedback: list[dict] | None = None,
+    problem_type: str | None = None, target_column: str | None = None,
+) -> dict:
+    base = transformation_agent.propose(df, plan_fields, feedback, problem_type, target_column)
     rejected = sorted(transformation_agent._rejected_scalings(feedback))
     user = json.dumps({
         "numeric_columns": plan_fields["numerical_columns"],

@@ -1,0 +1,5 @@
+# Optional: PostgreSQL support. Install with `pip install -r requirements-postgres.txt`, then set
+#   DATABASE_URL=postgresql+psycopg://user:password@host:5432/automl
+# in backend/.env. Without these packages the app stays on SQLite.
+psycopg[binary]>=3.1
+langgraph-checkpoint-postgres>=2.0

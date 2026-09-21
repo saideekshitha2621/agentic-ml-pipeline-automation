@@ -11,7 +11,7 @@ transform at prediction time, which those two (whole-dataframe) functions don't 
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import joblib
@@ -21,7 +21,7 @@ from sklearn.preprocessing import MinMaxScaler, RobustScaler, StandardScaler
 
 from app.core.config import MODELS_DIR
 from app.plugins.registry import get_classification_plugin, get_regression_plugin
-from app.services import explainability_service, preprocessing_service
+from app.services import explainability_service, feature_engineering_service, preprocessing_service
 
 _PLUGIN_LOOKUP = {"classification": get_classification_plugin, "regression": get_regression_plugin}
 
@@ -41,12 +41,16 @@ class ChampionPipeline:
     scaler: object | None
     estimator: object
     target_classes: list
+    feature_transforms: list = field(default_factory=list)  # Phase 4; older pickles lack it
 
     def transform(self, raw: dict) -> np.ndarray:
         row = {c: raw.get(c) for c in self.numerical_columns + self.categorical_columns}
         df = pd.DataFrame([row])
         for col in self.numerical_columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
+        # same stateless transform training used, applied to the *raw* entered value first
+        df = feature_engineering_service.apply(df, getattr(self, "feature_transforms", []))
+        for col in self.numerical_columns:
             if pd.isna(df[col]).any():
                 df[col] = df[col].fillna(self.impute_values.get(col, 0))
         for col in self.categorical_columns:
@@ -95,6 +99,10 @@ def build_and_persist(
     if drop_rows_cols:
         df = df.dropna(subset=drop_rows_cols).reset_index(drop=True)
 
+    feature_transforms = plan.get("feature_transforms") or []
+    raw_df = df  # the Prediction Playground schema must describe RAW values, not transformed ones
+    df = feature_engineering_service.apply(df, feature_transforms)
+
     y = df[target_column]
     working = df.drop(columns=[target_column]).drop(columns=plan["dropped_columns"], errors="ignore").copy()
     numerical_columns = [c for c in plan["numerical_columns"] if c in working.columns]
@@ -141,7 +149,7 @@ def build_and_persist(
         scaler = SCALERS.get(plan["scaling_method"], StandardScaler)()
         X = scaler.fit_transform(X)
 
-    estimator = plugin.build_model(params)
+    estimator = getattr(plugin, "build_configured", plugin.build_model)(params)
     estimator.fit(X, y.values)
 
     # Meaningless (and wastefully large) for a continuous regression target — a classifier's
@@ -157,6 +165,7 @@ def build_and_persist(
         scaler=scaler,
         estimator=estimator,
         target_classes=target_classes,
+        feature_transforms=feature_transforms,
     )
 
     model_path = MODELS_DIR / f"{pipeline_run_id}-{uuid.uuid4().hex[:8]}.joblib"
@@ -166,17 +175,17 @@ def build_and_persist(
 
     feature_schema = {}
     for col in numerical_columns:
-        series = pd.to_numeric(df[col], errors="coerce").dropna()
+        series = pd.to_numeric(raw_df[col], errors="coerce").dropna()
         feature_schema[col] = {
             "type": "numeric",
             "min": float(series.min()) if not series.empty else None,
             "max": float(series.max()) if not series.empty else None,
-            "default": impute_values.get(col),
+            "default": feature_engineering_service.inverse_value(impute_values.get(col), col, feature_transforms),
         }
     for col in categorical_columns:
         feature_schema[col] = {
             "type": "categorical",
-            "options": sorted(df[col].dropna().astype(str).unique().tolist()),
+            "options": sorted(raw_df[col].dropna().astype(str).unique().tolist()),
             "default": impute_values.get(col),
         }
 

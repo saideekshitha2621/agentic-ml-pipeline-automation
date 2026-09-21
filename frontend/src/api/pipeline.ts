@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiClient } from "./client";
+import { apiClient, withApiKey } from "./client";
 import type { AgentDecision, AgentRecommendation, ExecutiveSummary, PipelineReport, PipelineRun, TrainingProgress } from "../types";
 
 const RUNNING_STATUSES = new Set([
@@ -86,7 +86,7 @@ export function usePipelineReport(pipelineRunId: string | undefined, enabled: bo
 }
 
 export function pipelineReportExportUrl(pipelineRunId: string): string {
-  return `${apiClient.defaults.baseURL}/api/v1/pipeline-runs/${pipelineRunId}/report/export?format=pdf`;
+  return withApiKey(`${apiClient.defaults.baseURL}/api/v1/pipeline-runs/${pipelineRunId}/report/export?format=pdf`);
 }
 
 export function useExecutiveSummary(pipelineRunId: string | undefined) {

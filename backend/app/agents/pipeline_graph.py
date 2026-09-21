@@ -40,6 +40,7 @@ skip the HITL wait, reproducing what `_advance_or_wait` did in the old orchestra
 """
 from __future__ import annotations
 
+import logging
 import sqlite3
 from typing import TypedDict
 
@@ -47,7 +48,8 @@ import pandas as pd
 from langgraph.checkpoint.sqlite import SqliteSaver
 from langgraph.graph import END, START, StateGraph
 
-from app.core.config import STORAGE_DIR
+from app.core.config import DATABASE_URL, STORAGE_DIR
+from app.plugins.classification_base import class_weight_context
 from app.db.database import SessionLocal
 from app.db.models import Dataset as DatasetORM
 from app.db.models import Job as JobORM
@@ -66,6 +68,7 @@ from app.services import (
     llm_service,
     metric_glossary,
     preprocessing_service,
+    run_memory_service,
 )
 from app.agents import (
     algorithm_selection_llm,
@@ -364,7 +367,8 @@ def after_cleaning_node(state: PipelineState) -> dict:
         plan_fields = cleaning_plan_agent.to_preprocessing_plan_fields(cleaning_plan)
 
         transformation = transformation_llm.propose(
-            df, plan_fields, feedback=_feedback(db, pipeline_run_id, "transformation")
+            df, plan_fields, feedback=_feedback(db, pipeline_run_id, "transformation"),
+            problem_type=run.problem_type, target_column=run.declared_target,
         )
         decision_row = _decide(
             db, run, agent_name="transformation", stage="transformation", decision=transformation,
@@ -440,6 +444,10 @@ def algorithm_shortlist_node(state: PipelineState) -> dict:
             profile, validation, run.problem_type, df, run.declared_target,
             feedback=_feedback(db, pipeline_run_id, "algorithm_recommendation"),
         )
+        # Cross-run memory: note (and keep) algorithms that won earlier runs of this dataset/target.
+        shortlist = run_memory_service.apply_to_shortlist(
+            shortlist, run_memory_service.similar_runs(db, run), algorithm_selection_llm._REGISTRY_BY_PROBLEM_TYPE[run.problem_type]
+        )
         decision_row = _decide(
             db, run, agent_name="algorithm_recommendation", stage="algorithm_recommendation", decision=shortlist,
             confidence=shortlist["confidence"], reasoning=algorithm_selection_llm.summarize(shortlist), auto_approve=None,
@@ -469,12 +477,15 @@ def _run_hpo(db, run: PipelineRunORM, job: JobORM, plan_fields: dict) -> None:
     )
     algorithms = sorted({r.algorithm for r in job.runs})
     key_metric = _HPO_KEY_METRIC[run.problem_type]
+    budget = hpo_service.plan_budget(len(X_train), len(algorithms))
     results = []
     for algorithm in algorithms:
-        result = hpo_service.optimize(
-            algorithm, X_train.values, y_train.values, X_test.values, y_test.values, job.config_json,
-            problem_type=run.problem_type,
-        )
+        with class_weight_context((job.config_json or {}).get("class_weight")):
+            result = hpo_service.optimize(
+                algorithm, X_train.values, y_train.values, X_test.values, y_test.values, job.config_json,
+                problem_type=run.problem_type,
+                budget=budget,
+            )
         results.append({k: v for k, v in result.items() if k != "run"})
         if result.get("skipped"):
             continue
@@ -487,12 +498,14 @@ def _run_hpo(db, run: PipelineRunORM, job: JobORM, plan_fields: dict) -> None:
 
     reasoning = "; ".join(
         f"{r['algorithm']}: baseline {key_metric}={r.get('baseline_metrics', {}).get(key_metric)} -> "
-        f"optimized {key_metric}={r.get('optimized_metrics', {}).get(key_metric)} ({r.get('n_trials', 0)} trial(s))"
+        f"optimized {key_metric}={r.get('optimized_metrics', {}).get(key_metric)} "
+        f"({r.get('n_trials', 0)} trial(s)" + (", stopped early — baseline already near-perfect)" if r.get("early_stopped") else ")")
         for r in results if not r.get("skipped")
     ) or "No algorithms had a registered search space."
+    reasoning = f"[{budget['tier']} budget: {budget['n_train_rows']} training rows] " + reasoning
     _decide(
         db, run, agent_name="hyperparameter_optimization", stage="hyperparameter_optimization",
-        decision={"results": results}, confidence=1.0, reasoning=reasoning, auto_approve=True,
+        decision={"results": results, "budget": budget}, confidence=1.0, reasoning=reasoning, auto_approve=True,
     )
 
 
@@ -545,10 +558,19 @@ def _effective_plan_fields(db, run: PipelineRunORM) -> dict:
     cleaning_decision = agent_decision_service.latest_decision(db, run.id, "cleaning_plan")
     transformation_decision = agent_decision_service.latest_decision(db, run.id, "transformation")
     plan_fields = cleaning_plan_agent.to_preprocessing_plan_fields(_proposal(cleaning_decision))
-    plan_fields["scaling_method"] = _proposal(transformation_decision).get("scaling_method", plan_fields["scaling_method"])
+    transformation = _proposal(transformation_decision)
+    plan_fields["scaling_method"] = transformation.get("scaling_method", plan_fields["scaling_method"])
+    plan_fields["feature_transforms"] = transformation.get("feature_transforms", [])
     if "alternate_scaling" in _applied_remedies(db, run.id):
         plan_fields["scaling_method"] = quality_check_agent.alternate_scaling(plan_fields["scaling_method"])
     return plan_fields
+
+
+def _effective_class_weight(db, run: PipelineRunORM) -> str | None:
+    """"balanced" when the approved transformation stage chose class re-weighting."""
+    decision = agent_decision_service.latest_decision(db, run.id, "transformation")
+    strategy = (_proposal(decision) or {}).get("imbalance", {}).get("strategy") if decision else None
+    return "balanced" if run.problem_type == "classification" and strategy == "class_weight_balanced" else None
 
 
 def _all_algorithms(problem_type: str) -> list[str]:
@@ -572,6 +594,7 @@ def after_algorithm_node(state: PipelineState) -> dict:
         plan_fields = _effective_plan_fields(db, run)
         split = _proposal(split_decision)
         algorithms = _proposal(algorithm_decision)["selected_algorithms"]
+        class_weight = _effective_class_weight(db, run)
         remedies = _applied_remedies(db, pipeline_run_id)
         if "broaden_algorithms" in remedies:
             algorithms = _all_algorithms(run.problem_type)
@@ -584,7 +607,7 @@ def after_algorithm_node(state: PipelineState) -> dict:
         job = JobORM(
             dataset_id=run.dataset_id,
             preprocessing_plan_id=plan_orm.id,
-            config_json={},
+            config_json={"class_weight": class_weight} if class_weight else {},
             status="queued",
             log_lines=["Job queued by agent orchestrator."]
             + ([f"Self-correction attempt {len(remedies)}: applied {remedies}."] if remedies else []),
@@ -704,6 +727,7 @@ def recommend_node(state: PipelineState) -> dict:
             cleaning=_proposal(cleaning_decision) if cleaning_decision else None,
             n_rows=dataset.n_rows,
             retry_remedies=_applied_remedies(db, pipeline_run_id),
+            history=run_memory_service.similar_runs(db, run),
         )
         _decide(
             db, run, agent_name="critic", stage="critic_review", decision=review,
@@ -766,10 +790,11 @@ def finalize_node(state: PipelineState) -> dict:
             plan_fields = _effective_plan_fields(db, run)
 
             champion_run = db.get(ModelRunORM, top["cluster_run_id"])
-            built = champion_service.build_and_persist(
-                df, plan_fields, run.declared_target, champion_run.algorithm, champion_run.params_json, run.id,
-                problem_type=run.problem_type,
-            )
+            with class_weight_context(_effective_class_weight(db, run)):
+                built = champion_service.build_and_persist(
+                    df, plan_fields, run.declared_target, champion_run.algorithm, champion_run.params_json, run.id,
+                    problem_type=run.problem_type,
+                )
             run.champion_model_path = built["model_path"]
             run.champion_run_id = champion_run.id
             run.feature_schema_json = built["feature_schema"]
@@ -801,6 +826,27 @@ def finalize_node(state: PipelineState) -> dict:
 
 def _route(state: PipelineState) -> str:
     return state["route"]
+
+
+def _make_checkpointer():
+    """SQLite file by default. With a PostgreSQL DATABASE_URL and `langgraph-checkpoint-postgres`
+    + `psycopg` installed, run state lives in Postgres too (so pause/resume survives redeploys and
+    works across workers). Falls back to SQLite, with a warning, if that setup isn't available."""
+    if DATABASE_URL.startswith("postgres"):
+        try:
+            import psycopg
+            from langgraph.checkpoint.postgres import PostgresSaver
+
+            conn = psycopg.connect(DATABASE_URL.replace("+psycopg", "").replace("+psycopg2", ""), autocommit=True)
+            saver = PostgresSaver(conn)
+            saver.setup()
+            return saver
+        except Exception as exc:  # noqa: BLE001
+            logging.getLogger(__name__).warning(
+                "PostgreSQL checkpointer unavailable (%s); falling back to a local SQLite checkpoint file.", exc
+            )
+    conn = sqlite3.connect(str(STORAGE_DIR / "langgraph_checkpoints.db"), check_same_thread=False)
+    return SqliteSaver(conn)
 
 
 def _build_graph():
@@ -861,8 +907,7 @@ def _build_graph():
     graph.add_conditional_edges("gate_recommendation", _gate_route, {"revise": "recommend", "next": "finalize"})
     graph.add_edge("finalize", END)
 
-    conn = sqlite3.connect(str(STORAGE_DIR / "langgraph_checkpoints.db"), check_same_thread=False)
-    checkpointer = SqliteSaver(conn)
+    checkpointer = _make_checkpointer()
     return graph.compile(
         checkpointer=checkpointer,
         interrupt_before=[

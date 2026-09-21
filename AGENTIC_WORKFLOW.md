@@ -1,7 +1,7 @@
 # Agentic ML Pipeline — Workflow & Progress Report
 
-Implementation status: **Phases 1, 2 and 3 complete; Phases 4 and 5 pending** (one Phase 5 item, LLM rate-limit guardrails, was pulled forward).
-Backend test suite: 87 passing (63 pre-existing + 24 new in `backend/tests/test_agentic_loops.py`).
+Implementation status: **All five phases implemented.** Phase 5 has two infrastructure items that are only *partly* done (see section 2).
+Backend test suite: 106 passing (63 pre-existing + 43 new in `backend/tests/test_agentic_loops.py`); frontend type-checks.
 
 ## 1. The agentic workflow
 
@@ -53,8 +53,8 @@ Two loops make it agentic rather than a linear pipeline:
 | 1 | Productive rejection + real confidence | **Done** | Revision loop through LangGraph conditional edges from each revisable gate (`pipeline_graph.py`). `feedback` support in the problem-detection, cleaning, transformation, split and algorithm agents (`feedback_utils.py`). Router re-dispatches instead of failing (`routers/pipeline.py`). Hard-coded confidences replaced by signal-derived scores with a `confidence_factors` audit list. |
 | 2 | Closed loop + critic | **Done** | `quality_check_agent.py` (bounded retry, remedies `broaden_algorithms` then `alternate_scaling`, leakage smell is flagged not retried). `critic_agent.py` (leakage, unresolved weak signal, near-tie, small data, data-quality flags). Critic findings are attached to the recommendation the human reviews. |
 | 3 | Real reasoning + tools | **Done** | Tool-calling loop `llm_service.run_tool_loop` with adapters for **Gemini**, Anthropic and OpenAI. Read-only dataset tools (`dataset_tools.py`: column stats, value counts, outlier report, leakage probe). LLM-with-fallback problem detection and transformation. Algorithm agent takes feedback. Guardrails: the LLM cannot change dtype-derived problem type, cannot repeat a rejected choice, can only lower confidence, and any failure falls back to the deterministic result. |
-| 4 | Capability expansion | Pending | Feature-engineering agent, imbalance handling, adaptive HPO budget, chat that triggers gated actions. |
-| 5 | Productionisation | Pending | Job queue (Celery/RQ), Postgres, object storage, auth, drift/monitoring agent, cross-run memory, agent-quality eval harness. |
+| 4 | Capability expansion | **Done** | Class-imbalance handling (`class_weight=balanced` for supporting models, decided at the Transformation stage, applied to training, tuning and the final refit). Feature engineering (`feature_engineering_service.py`: log1p on heavily skewed columns, applied identically in training, champion refit and single-row prediction; playground schema stays in raw units). Adaptive tuning budget (`hpo_service.plan_budget`: fewer folds/iterations on big data; early stop when the baseline is already near-perfect). Chat actions (`chat_action_service.py`: an instruction becomes a *proposed* action that runs only when confirmed through the normal review endpoint). |
+| 5 | Productionisation | **Done, with caveats** | In-process task queue (bounded pool, per-run serialization, failure capture), PostgreSQL-capable config and checkpointer, API-key auth, drift monitoring agent, cross-run memory, agent-quality metrics endpoint. **Not done:** distributed broker (Celery/RQ + Redis), object storage (S3/Blob), user accounts/roles. **Not verified live:** PostgreSQL (no server available here). |
 
 ### Phase 3 additions (latest)
 * `cleaning_plan_llm.py`: the LLM re-chooses the imputation strategy per column from real column statistics
@@ -88,3 +88,25 @@ the other two keys unset. With no key set, every agent uses its deterministic pa
 | Dataset tools | `backend/app/agents/dataset_tools.py` |
 | LLM agents | `problem_detection_llm.py`, `transformation_llm.py`, `algorithm_selection_llm.py` |
 | Tests | `backend/tests/test_agentic_loops.py` |
+
+## 5. Phase 4 and 5 details
+
+### Phase 4
+* **Imbalance:** majority:minority >= 3:1 proposes `class_weight_balanced`. Gradient boosting and kNN have no such
+  parameter and are left unchanged. Resampling (SMOTE) is intentionally not included (needs an extra dependency and
+  changes the training set, which deserves its own review).
+* **Feature engineering:** stateless log1p only, so applying it before the split cannot leak. Say "no log" in a rejection
+  reason to turn it off; "no class weight" turns imbalance handling off.
+* **Chat actions:** only instructions ("use...", "exclude...", "switch...") produce an action, only for a revisable pending
+  decision, and only after the user clicks Confirm. Questions still go to the LLM. Instructions skip the LLM entirely.
+
+### Phase 5
+| Piece | How to use it | Status |
+|---|---|---|
+| Task queue | `TASK_WORKERS` (default 4), `TASK_BACKEND=inline` for synchronous runs | In-process only: bounded and serialized per run, but does not survive a restart or span machines |
+| PostgreSQL | `pip install -r backend/requirements-postgres.txt`, set `DATABASE_URL=postgresql+psycopg://...` | Config, engine and checkpointer are wired; **untested against a live Postgres** |
+| Auth | Set `API_KEYS=key1,key2` on the backend, `VITE_API_KEY=key1` on the frontend | Shared secret only (no per-user identity or roles); unset = open |
+| Monitoring | `GET /api/v1/pipeline-runs/{id}/monitoring` | Advisory drift report from logged predictions (needs 20+) |
+| Cross-run memory | Automatic | Advisory only: notes prior winners, critic compares; never overrides a gate |
+| Agent metrics | `GET /api/v1/agent-metrics` | Approval/edit/rejection rates, confidence, LLM-vs-fallback share, revisions and self-corrections per run |
+| Object storage | not built | Files are still stored on local disk |

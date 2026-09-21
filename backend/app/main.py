@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.auth import require_api_key
 from app.core.config import CORS_ORIGINS
 from app.db.database import init_db
 from app.routers import (
@@ -11,6 +12,7 @@ from app.routers import (
     datasets,
     jobs,
     leaderboard,
+    monitoring,
     pca,
     pipeline,
     prediction,
@@ -37,17 +39,20 @@ def on_startup():
     init_db()
 
 
-app.include_router(datasets.router)
-app.include_router(preprocessing.router)
-app.include_router(pca.router)
-app.include_router(jobs.router)
-app.include_router(leaderboard.router)
-app.include_router(approval.router)
-app.include_router(visualizations.router)
-app.include_router(reports.router)
-app.include_router(pipeline.router)
-app.include_router(prediction.router)
-app.include_router(chat.router)
+_protected = [Depends(require_api_key)]  # no-op unless API_KEYS is set (see app/core/auth.py)
+
+app.include_router(datasets.router, dependencies=_protected)
+app.include_router(preprocessing.router, dependencies=_protected)
+app.include_router(pca.router, dependencies=_protected)
+app.include_router(jobs.router, dependencies=_protected)
+app.include_router(leaderboard.router, dependencies=_protected)
+app.include_router(approval.router, dependencies=_protected)
+app.include_router(visualizations.router, dependencies=_protected)
+app.include_router(reports.router, dependencies=_protected)
+app.include_router(pipeline.router, dependencies=_protected)
+app.include_router(prediction.router, dependencies=_protected)
+app.include_router(chat.router, dependencies=_protected)
+app.include_router(monitoring.router, dependencies=_protected)
 
 
 @app.get("/api/v1/health")

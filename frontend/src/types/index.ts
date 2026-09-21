@@ -276,7 +276,16 @@ export interface ExecutiveSummary {
   ml_type: string | null;
   target_variable: string | null;
   recommended_model: { algorithm: string; rationale: string; business_benefits: string[] } | null;
-  performance_summary: { headline_metric_sentence: string | null; confidence: string | null } | null;
+  performance_summary: {
+    headline_metric_sentence: string | null;
+    /** Strong | Good | Fair | Weak | Verify | Unknown — rating of the model's held-out score */
+    level: string | null;
+    explanation: string | null;
+    /** neutral note when several top models scored almost equally */
+    tie_note: string | null;
+    /** legacy: ranking closeness only ("low" = top two models nearly tied); not a quality rating */
+    confidence: string | null;
+  } | null;
 }
 
 export interface AgentRecommendation {
@@ -343,4 +352,20 @@ export interface PipelineReport {
     };
   };
   final_outcome: string;
+}
+
+export interface ChatSuggestedAction {
+  type: "revise_pending_decision";
+  decision_id: string;
+  agent_name: string;
+  description: string;
+  review_request: { action: "reject"; reason: string };
+}
+
+/** Colour for a model-quality level from the backend's model_assessment_service. */
+export function modelLevelColor(level: string | null | undefined): "success" | "warning" | "error" | "default" {
+  if (level === "Strong" || level === "Good") return "success";
+  if (level === "Fair" || level === "Verify") return "warning";
+  if (level === "Weak") return "error";
+  return "default";
 }

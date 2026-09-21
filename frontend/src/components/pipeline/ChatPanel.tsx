@@ -1,17 +1,21 @@
 import { useState } from "react";
-import { Box, IconButton, Paper, Stack, TextField, Typography, Drawer, Fab, CircularProgress } from "@mui/material";
+import { Alert, Box, Button, IconButton, Paper, Stack, TextField, Typography, Drawer, Fab, CircularProgress } from "@mui/material";
 import { Chat, Close, Send, SmartToy, Person } from "@mui/icons-material";
-import { useChatHistory, useSendChatMessage } from "../../api/chat";
+import { useApplyChatAction, useChatHistory, useSendChatMessage } from "../../api/chat";
+import type { ChatSuggestedAction } from "../../types";
 
 export default function ChatPanel({ pipelineRunId }: { pipelineRunId: string }) {
   const [open, setOpen] = useState(false);
   const [question, setQuestion] = useState("");
   const { data: messages } = useChatHistory(open ? pipelineRunId : undefined);
   const send = useSendChatMessage(pipelineRunId);
+  const apply = useApplyChatAction(pipelineRunId);
+  const [action, setAction] = useState<ChatSuggestedAction | null>(null);
 
   const submit = () => {
     if (!question.trim()) return;
-    send.mutate(question.trim());
+    setAction(null);
+    send.mutate(question.trim(), { onSuccess: (msg) => setAction(msg.suggested_action ?? null) });
     setQuestion("");
   };
 
@@ -57,6 +61,24 @@ export default function ChatPanel({ pipelineRunId }: { pipelineRunId: string }) 
                 </Paper>
               ))}
               {send.isPending && <CircularProgress size={20} />}
+              {action && (
+                <Alert
+                  severity="info"
+                  action={
+                    <Button
+                      color="inherit"
+                      size="small"
+                      disabled={apply.isPending}
+                      onClick={() => apply.mutate(action, { onSuccess: () => setAction(null) })}
+                    >
+                      Confirm
+                    </Button>
+                  }
+                >
+                  Proposed action: send the pending {action.agent_name.replace(/_/g, " ")} back to its agent.
+                </Alert>
+              )}
+              {apply.isError && <Alert severity="error">Could not apply that action.</Alert>}
             </Stack>
           </Box>
           <Stack direction="row" spacing={1} sx={{ p: 2, borderTop: 1, borderColor: "divider" }}>

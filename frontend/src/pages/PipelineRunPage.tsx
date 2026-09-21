@@ -36,7 +36,7 @@ import {
   useTrainingProgress,
 } from "../api/pipeline";
 import type { AgentDecision, PipelineRunStatus } from "../types";
-import { PIPELINE_STAGES } from "../types";
+import { PIPELINE_STAGES, modelLevelColor } from "../types";
 import {
   AlgorithmShortlistContent,
   CleaningPlanContent,
@@ -47,6 +47,8 @@ import {
   TrainingProgressContent,
   TransformationContent,
   ValidationContent,
+  ConfusionMatrixTable,
+  isConfusionMatrix,
 } from "../components/pipeline/StageContent";
 import ChatPanel from "../components/pipeline/ChatPanel";
 import ExecutiveSummaryCard from "../components/pipeline/ExecutiveSummaryCard";
@@ -611,7 +613,7 @@ export default function PipelineRunPage() {
               <Typography variant="subtitle1">Model Performance</Typography>
               <Typography variant="body2" sx={{ mt: 0.5 }}>{report.model_performance.reliability_sentence}</Typography>
               <Stack direction="row" spacing={1} sx={{ alignItems: "center", mt: 0.5 }}>
-                <Chip size="small" label={report.model_performance.confidence_level} color={report.model_performance.confidence_level === "High" ? "success" : "warning"} />
+                <Chip size="small" label={report.model_performance.confidence_level} color={modelLevelColor(report.model_performance.confidence_level)} />
                 <Typography variant="body2">{report.model_performance.confidence_explanation}</Typography>
               </Stack>
             </Box>
@@ -656,12 +658,17 @@ export default function PipelineRunPage() {
                 <Table size="small" sx={{ mt: 1 }}>
                   <TableHead><TableRow><TableCell>Metric</TableCell><TableCell>Value</TableCell></TableRow></TableHead>
                   <TableBody>
-                    {Object.entries(report.technical_appendix.model_details).map(([k, v]) => (
-                      <TableRow key={k}><TableCell>{k}</TableCell><TableCell>{typeof v === "object" ? JSON.stringify(v) : String(v)}</TableCell></TableRow>
-                    ))}
+                    {Object.entries(report.technical_appendix.model_details)
+                      .filter(([, v]) => !isConfusionMatrix(v))
+                      .map(([k, v]) => (
+                        <TableRow key={k}><TableCell>{k}</TableCell><TableCell>{typeof v === "object" ? JSON.stringify(v) : String(v)}</TableCell></TableRow>
+                      ))}
                   </TableBody>
                 </Table>
               )}
+              {Object.values(report.technical_appendix.model_details).filter(isConfusionMatrix).map((cm, i) => (
+                <Box key={i} sx={{ mt: 1.5 }}><ConfusionMatrixTable cm={cm} /></Box>
+              ))}
               {report.technical_appendix.train_test_split && (
                 <Typography variant="body2" sx={{ mt: 1 }}>
                   Training: {report.technical_appendix.train_test_split.training} records · Testing: {report.technical_appendix.train_test_split.testing} records

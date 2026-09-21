@@ -43,6 +43,7 @@ def _plan_to_dict(plan: PreprocessingPlanORM) -> dict:
         "pca_enabled": plan.pca_enabled,
         "pca_variance_target": plan.pca_variance_target,
         "column_actions": plan.column_actions,
+        "feature_transforms": plan.feature_transforms or [],
     }
 
 
@@ -336,7 +337,10 @@ def run_job(job_id: str) -> None:
             db.commit()
             return
 
-        runner(db, job, df, plan, job_dir, log)
+        from app.plugins.classification_base import class_weight_context
+
+        with class_weight_context((job.config_json or {}).get("class_weight")):
+            runner(db, job, df, plan, job_dir, log)
     except Exception as exc:  # noqa: BLE001 - surface any failure to the UI
         db.rollback()
         job = db.get(Job, job_id)

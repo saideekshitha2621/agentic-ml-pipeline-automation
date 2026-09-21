@@ -10,6 +10,9 @@ from __future__ import annotations
 import pandas as pd
 
 from app.agents import feedback_utils
+from app.services import feature_engineering_service
+
+IMBALANCE_RATIO_THRESHOLD = 3.0  # majority:minority at/above which class re-weighting is proposed
 
 SCALING_ALTERNATIVES = ["standard", "robust", "minmax"]
 _SCALING_LABELS = {
@@ -35,7 +38,33 @@ def pick_alternative_scaling(previous: set[str], hint_text: str = "") -> str | N
     )
 
 
-def propose(df: pd.DataFrame, plan_fields: dict, feedback: list[dict] | None = None) -> dict:
+def analyze_imbalance(y: pd.Series) -> dict:
+    counts = y.dropna().value_counts()
+    if len(counts) < 2:
+        return {"ratio": None, "minority_share": None, "strategy": "none", "reason": "Fewer than two classes."}
+    ratio = float(counts.max() / max(counts.min(), 1))
+    share = float(counts.min() / counts.sum())
+    if ratio >= IMBALANCE_RATIO_THRESHOLD:
+        return {
+            "ratio": round(ratio, 1), "minority_share": round(share, 3), "strategy": "class_weight_balanced",
+            "reason": f"Classes are imbalanced ({ratio:.1f}:1, rarest class {share:.0%} of rows) — re-weighting classes "
+            "stops models from ignoring the rare outcome. Applied to algorithms that support it.",
+        }
+    return {"ratio": round(ratio, 1), "minority_share": round(share, 3), "strategy": "none",
+            "reason": f"Classes are reasonably balanced ({ratio:.1f}:1) — no re-weighting needed."}
+
+
+def _feedback_says(feedback: list[dict] | None, *phrases: str) -> bool:
+    text = " ".join(feedback_utils.reasons(feedback)).lower()
+    return any(p in text for p in phrases)
+
+
+def propose(
+    df: pd.DataFrame, plan_fields: dict, feedback: list[dict] | None = None,
+    problem_type: str | None = None, target_column: str | None = None,
+) -> dict:
+    """`problem_type`/`target_column` (Phase 4) enable feature engineering and class-imbalance
+    handling for supervised runs; without them the proposal is the classic scaling/encoding."""
     numerical = plan_fields["numerical_columns"]
     categorical = plan_fields["categorical_columns"]
 
@@ -92,7 +121,21 @@ def propose(df: pd.DataFrame, plan_fields: dict, feedback: list[dict] | None = N
             )
 
     confidence, factors = estimate_confidence(len(df), max_outlier_frac, max_cardinality, revised=bool(feedback))
+
+    supervised = problem_type in ("classification", "regression")
+    feature_transforms = (
+        feature_engineering_service.propose_log_transforms(df, numerical, target_column)
+        if supervised and not _feedback_says(feedback, "no log", "skip log", "without log", "no feature engineering")
+        else []
+    )
+    imbalance = {"strategy": "none", "reason": "Not applicable."}
+    if problem_type == "classification" and target_column in df.columns:
+        imbalance = analyze_imbalance(df[target_column])
+        if _feedback_says(feedback, "no class weight", "no balanc", "without balanc", "disable imbalance", "no reweight"):
+            imbalance = {**imbalance, "strategy": "none", "reason": "Class re-weighting disabled at your request."}
     return {
+        "feature_transforms": feature_transforms,
+        "imbalance": imbalance,
         "confidence": confidence,
         "confidence_factors": factors,
         "revision": len(feedback) if feedback else 0,
@@ -127,6 +170,11 @@ def estimate_confidence(
 
 def summarize(result: dict) -> str:
     parts = [result["scaling_reason"], result["encoding_reason"]]
+    if result.get("feature_transforms"):
+        cols = ", ".join(t["column"] for t in result["feature_transforms"])
+        parts.append(f"Log-transforming {len(result['feature_transforms'])} skewed column(s) ({cols}).")
+    if result.get("imbalance", {}).get("strategy") == "class_weight_balanced":
+        parts.append(result["imbalance"]["reason"])
     if result["engineered_features"]:
         parts.append(f"Proposing {len(result['engineered_features'])} engineered feature group(s) from datetime columns.")
     return " ".join(parts)

@@ -54,6 +54,10 @@ class PreprocessingPlanORM(Base):
     # Cleaning Plan HITL stage. Empty for plans built by the old detect_default_plan() flow,
     # which keeps using numerical_impute_strategy/categorical_impute_strategy globally.
     column_actions: Mapped[dict] = mapped_column(JSON, default=dict)
+    # [{"column", "op": "log1p", ...}] — feature-engineering transforms approved at the
+    # Transformation stage (see services/feature_engineering_service.py). Rows created before
+    # this column existed read back as NULL, so consumers use `or []`.
+    feature_transforms: Mapped[list] = mapped_column(JSON, default=list)
 
     dataset: Mapped["Dataset"] = relationship(back_populates="plans")
 

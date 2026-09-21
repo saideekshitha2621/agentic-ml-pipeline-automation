@@ -37,7 +37,9 @@ ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 
-DATABASE_URL = f"sqlite:///{(STORAGE_DIR / 'app.db').as_posix()}"
+# SQLite by default (zero setup). For PostgreSQL set DATABASE_URL, e.g.
+# postgresql+psycopg://user:password@host:5432/automl  (and `pip install -r requirements-postgres.txt`).
+DATABASE_URL = os.environ.get("DATABASE_URL") or f"sqlite:///{(STORAGE_DIR / 'app.db').as_posix()}"
 
 CORS_ORIGINS = [
     "http://localhost:5173",

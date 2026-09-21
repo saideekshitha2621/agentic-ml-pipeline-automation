@@ -22,6 +22,7 @@ def review(
     cleaning: dict | None,
     n_rows: int,
     retry_remedies: list[str],
+    history: list[dict] | None = None,
 ) -> dict:
     findings: list[dict] = []
 
@@ -54,6 +55,19 @@ def review(
     if leak_drops:
         add("info", "leakage_columns_dropped",
             f"Column(s) removed for leakage risk: {', '.join(leak_drops)} — confirm none was a legitimate predictor.")
+
+    if history:  # cross-run memory (Phase 5): compare with what won on earlier runs of this dataset/target
+        from collections import Counter
+
+        winners = Counter(h["champion_algorithm"] for h in history)
+        usual, wins = winners.most_common(1)[0]
+        chosen = recommendation["top_choice"]["algorithm"]
+        if chosen != usual:
+            add("info", "differs_from_history",
+                f"On {len(history)} earlier run(s) of this dataset/target, {usual} won {wins} time(s); this run recommends "
+                f"{chosen} instead — worth understanding what changed.")
+        else:
+            add("info", "consistent_with_history", f"{chosen} also won {wins} of {len(history)} earlier run(s) on this dataset/target.")
 
     severities = {f["severity"] for f in findings}
     verdict = "serious_concerns" if "high" in severities else "concerns" if "medium" in severities else "no_concerns"
