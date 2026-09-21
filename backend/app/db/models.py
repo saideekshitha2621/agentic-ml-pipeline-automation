@@ -191,6 +191,8 @@ class PipelineRun(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     dataset_id: Mapped[str] = mapped_column(ForeignKey("datasets.id"))
     declared_target: Mapped[str | None] = mapped_column(String, nullable=True)
+    # The user's stated goal: auto | supervised | unsupervised (steers problem detection)
+    learning_type: Mapped[str] = mapped_column(String, default="auto", server_default="auto")
     status: Mapped[str] = mapped_column(String, default="profiling")
     # profiling | awaiting_problem_approval | model_execution |
     # awaiting_recommendation_approval | reporting | completed | failed

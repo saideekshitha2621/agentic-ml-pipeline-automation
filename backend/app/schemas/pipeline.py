@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict
 class PipelineRunCreateRequest(BaseModel):
     dataset_id: str
     target_column: str | None = None  # optional explicit intent; skips target-detection heuristics
+    learning_type: Literal["auto", "supervised", "unsupervised"] = "auto"  # the user's goal
 
 
 class PipelineRun(BaseModel):
@@ -17,6 +18,7 @@ class PipelineRun(BaseModel):
     id: str
     dataset_id: str
     declared_target: str | None
+    learning_type: str = "auto"
     status: str
     problem_type: str | None
     job_id: str | None

@@ -9,7 +9,11 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any
 
+import logging
+
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -48,10 +52,12 @@ class ClusteringPlugin(ABC):
         for params in self.param_grid(config):
             try:
                 labels, extra = self.fit(X, params)
-            except Exception:
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("%s failed for params %s: %s: %s", self.name, params, type(exc).__name__, exc)
                 continue
             n_clusters = len(set(labels) - {-1})
             if n_clusters < 2:
+                logger.info("%s skipped for params %s: only %d cluster(s) found", self.name, params, n_clusters)
                 continue
             n_noise = int(np.sum(labels == -1))
             runs.append(PluginRun(self.name, params, labels, n_clusters, n_noise, extra))

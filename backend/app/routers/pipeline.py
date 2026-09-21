@@ -42,7 +42,10 @@ def create_pipeline_run(
     if not dataset:
         raise HTTPException(404, "Dataset not found.")
 
-    run = PipelineRunORM(dataset_id=body.dataset_id, declared_target=body.target_column, status="profiling")
+    run = PipelineRunORM(
+        dataset_id=body.dataset_id, declared_target=body.target_column,
+        learning_type=body.learning_type, status="profiling",
+    )
     db.add(run)
     db.commit()
     db.refresh(run)
@@ -80,6 +83,16 @@ def review_decision(
         raise HTTPException(404, "Decision not found for this pipeline run.")
     if decision.status != "proposed":
         raise HTTPException(409, "This decision has already been reviewed.")
+
+    if decision.decision_json.get("requires_target_selection"):
+        # The proposed target is only a guess: force an explicit human choice.
+        if body.action == "approve":
+            raise HTTPException(
+                409, "The target column is only a suggestion — select the target column (or clustering) explicitly."
+            )
+        edits = body.edits or {}
+        if body.action == "edit" and edits.get("problem_type") != "clustering" and not edits.get("target_column"):
+            raise HTTPException(400, "Select a target column, or choose clustering.")
 
     if body.action == "approve":
         decision.status = "approved"

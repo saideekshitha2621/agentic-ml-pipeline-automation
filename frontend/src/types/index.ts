@@ -208,6 +208,7 @@ export interface PipelineRun {
   id: string;
   dataset_id: string;
   declared_target: string | null;
+  learning_type?: "auto" | "supervised" | "unsupervised";
   status: PipelineRunStatus;
   problem_type: string | null;
   job_id: string | null;

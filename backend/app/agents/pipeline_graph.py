@@ -217,7 +217,8 @@ def problem_node(state: PipelineState) -> dict:
         profile = data_profiling_agent.analyze(df, dataset.profile_json)
 
         result = problem_detection_llm.detect(
-            df, profile, declared_target=run.declared_target, feedback=_feedback(db, pipeline_run_id, "problem_detection")
+            df, profile, declared_target=run.declared_target, feedback=_feedback(db, pipeline_run_id, "problem_detection"),
+            learning_type=run.learning_type or "auto",
         )
         _decide(
             db, run, agent_name="problem_detection", stage="problem_detection", decision=result,
@@ -247,7 +248,11 @@ def after_problem_node(state: PipelineState) -> dict:
         proposal = _proposal(decision)
         problem_type = proposal["problem_type"]
         run.problem_type = problem_type
-        run.declared_target = proposal.get("target_column") or run.declared_target
+        # Clustering has no target: don't let a stale declared/previously-proposed one leak into
+        # validation and preprocessing after the reviewer chose (or was proposed) clustering.
+        run.declared_target = (
+            None if problem_type == "clustering" else proposal.get("target_column") or run.declared_target
+        )
 
         if problem_type not in SUPPORTED_PROBLEM_TYPES:
             run.status = "failed"

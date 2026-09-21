@@ -18,7 +18,7 @@ const RUNNING_STATUSES = new Set([
 export function useCreatePipelineRun() {
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: async (body: { dataset_id: string; target_column?: string }) =>
+    mutationFn: async (body: { dataset_id: string; target_column?: string; learning_type?: "auto" | "supervised" | "unsupervised" }) =>
       (await apiClient.post<PipelineRun>("/api/v1/pipeline-runs", body)).data,
     onSuccess: (run) => {
       queryClient.invalidateQueries({ queryKey: ["pipeline-run", run.id] });

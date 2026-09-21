@@ -1,5 +1,6 @@
-import { Box, Button, Card, CardActions, CardContent, Stack, Typography } from "@mui/material";
+import { Box, Button, Card, CardActions, CardContent, Stack, ToggleButton, ToggleButtonGroup, Typography } from "@mui/material";
 import { SmartToy, Tune } from "@mui/icons-material";
+import { useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { useCreatePipelineRun } from "../api/pipeline";
 import { useWorkspace } from "../components/WorkspaceContext";
@@ -9,11 +10,12 @@ export default function WorkflowSelectionPage() {
   const { setPipelineRunId } = useWorkspace();
   const createPipelineRun = useCreatePipelineRun();
   const navigate = useNavigate();
+  const [learningType, setLearningType] = useState<"auto" | "supervised" | "unsupervised">("auto");
 
   const handleAgenticWorkflow = () => {
     if (!datasetId) return;
     createPipelineRun.mutate(
-      { dataset_id: datasetId },
+      { dataset_id: datasetId, learning_type: learningType },
       {
         onSuccess: (run) => {
           setPipelineRunId(run.id);
@@ -62,6 +64,21 @@ export default function WorkflowSelectionPage() {
               Let the agent automatically profile, preprocess, and run models on your dataset, with
               decisions you can review and approve.
             </Typography>
+            <Typography variant="body2" sx={{ mt: 2, mb: 1 }}>
+              What do you want to do with this data?
+            </Typography>
+            <ToggleButtonGroup
+              exclusive
+              size="small"
+              orientation="vertical"
+              fullWidth
+              value={learningType}
+              onChange={(_, v) => v && setLearningType(v)}
+            >
+              <ToggleButton value="auto">Not sure — suggest for me</ToggleButton>
+              <ToggleButton value="supervised">Predict a column (classification / regression)</ToggleButton>
+              <ToggleButton value="unsupervised">Find groups, no target (clustering)</ToggleButton>
+            </ToggleButtonGroup>
           </CardContent>
           <CardActions>
             <Button

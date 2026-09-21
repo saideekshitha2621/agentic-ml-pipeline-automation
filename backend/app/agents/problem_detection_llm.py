@@ -38,9 +38,16 @@ def _with_fallback(base: dict, reason: str) -> dict:
 
 
 def detect(
-    df: pd.DataFrame, profile: dict, declared_target: str | None = None, feedback: list[dict] | None = None
+    df: pd.DataFrame,
+    profile: dict,
+    declared_target: str | None = None,
+    feedback: list[dict] | None = None,
+    learning_type: str = "auto",
 ) -> dict:
-    base = {**problem_detection_agent.detect(df, profile, declared_target, feedback), "revision": len(feedback) if feedback else 0}
+    base = {
+        **problem_detection_agent.detect(df, profile, declared_target, feedback, learning_type),
+        "revision": len(feedback) if feedback else 0,
+    }
     candidates = base.get("target_candidates")
     if not candidates:  # declared target, or nothing target-like — nothing for an LLM to decide
         return _with_fallback(base, "not_applicable")
@@ -75,6 +82,9 @@ def detect(
         confidence = 0.6
     rationale = str(parsed.get("rationale", "")).strip()
 
+    if target is None and learning_type == "supervised":
+        return _with_fallback(base, "llm_chose_no_target_but_user_wants_supervised")
+
     if target is None:
         decision = problem_detection_agent._decision(
             "clustering", None, min(max(confidence, 0.0), 0.85),
@@ -87,6 +97,10 @@ def detect(
             [f"LLM investigated {len(result.calls)} tool call(s) and chose '{target}': {rationale}", dtype_reason],
             target_candidates=candidates,
         )
+    # The LLM's pick is still only a suggestion unless the heuristic already trusted it.
+    decision["requires_target_selection"] = target is not None and not (
+        base.get("target_column") == target and not base.get("requires_target_selection")
+    )
     return {**decision, "source": "llm", "fallback_reason": None, "tool_calls": result.calls,
             "revision": len(feedback) if feedback else 0}
 

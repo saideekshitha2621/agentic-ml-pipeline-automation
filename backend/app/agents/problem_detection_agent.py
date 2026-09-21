@@ -30,6 +30,14 @@ REGRESSION_MIN_DISTINCT_RATIO = 0.05
 REGRESSION_MIN_DISTINCT_ABS = 200
 WEAK_SIGNAL_CONFIDENCE_CAP = 0.55
 LOW_CONFIDENCE_THRESHOLD = 0.6
+# With no declared target, a best candidate scoring below this has no name/label signal at
+# all (a plain continuous or low-cardinality column scores ~0.3), so treat the dataset as
+# unlabeled and propose clustering rather than an arbitrary supervised target.
+CLUSTERING_FALLBACK_SCORE = 0.4
+# A continuous column with no name signal is the *least* label-like thing in an unlabeled
+# table (it can score 0.4 from cardinality + being last), so it needs a stricter bar than a
+# low-cardinality column, which plausibly is a class label.
+CLUSTERING_FALLBACK_SCORE_CONTINUOUS = 0.45
 
 _STRONG_TARGET_NAMES = {"target", "label", "y", "outcome", "class", "result"}
 _CLASSIFICATION_NAME_HINTS = [
@@ -76,11 +84,14 @@ def _name_pattern_score(column: str) -> tuple[float, str | None]:
         return -0.3, f"Column name '{column}' looks like an identifier (id/key/code/uuid pattern)."
     if normalized in _STRONG_TARGET_NAMES:
         return 0.35, f"Column name '{column}' is a conventional target-name keyword."
+    # Whole-word match only: substring matching made "PURCHASES_FREQUENCY" look like an
+    # outcome because it contains "purchase". Hints ending in "_" (is_, has_) are prefixes.
+    tokens = set(re.split(r"[^a-z0-9]+", normalized))
     for kw in _CLASSIFICATION_NAME_HINTS:
-        if kw in normalized:
+        if (normalized.startswith(kw) if kw.endswith("_") else kw in tokens):
             return 0.25, f"Column name contains '{kw}', a common outcome/label keyword."
     for kw in _REGRESSION_NAME_HINTS:
-        if kw in normalized:
+        if kw in tokens:
             return 0.2, f"Column name contains '{kw}', a common numeric-outcome keyword."
     return 0.0, None
 
@@ -117,12 +128,9 @@ def _target_candidate_score(column: str, series: pd.Series, position_bonus: floa
 
 
 def _rank_target_candidates(df: pd.DataFrame, candidates: list[str], columns: list[str]) -> list[dict]:
-    last_col = columns[-1] if columns else None
-    first_col = columns[0] if columns else None
-    ranked = []
-    for col in candidates:
-        position_bonus = 0.1 if col == last_col else (-0.05 if col == first_col else 0.0)
-        ranked.append(_target_candidate_score(col, df[col], position_bonus))
+    # Column position is deliberately not a signal: in an unlabeled table the last column
+    # is just another feature.
+    ranked = [_target_candidate_score(col, df[col], 0.0) for col in candidates]
     ranked.sort(key=lambda c: c["score"], reverse=True)
     return ranked
 
@@ -133,6 +141,7 @@ def _decision(
     confidence: float,
     reasoning: list[str],
     target_candidates: list[dict] | None = None,
+    requires_target_selection: bool = False,
 ) -> dict:
     decision = {
         "problem_type": problem_type,
@@ -140,6 +149,9 @@ def _decision(
         "confidence": round(confidence, 2),
         "reasoning": reasoning,
         "requires_review": confidence < LOW_CONFIDENCE_THRESHOLD,
+        # True => the proposed target is only a suggestion: the reviewer must explicitly pick
+        # a target column (or clustering); "approve as proposed" is refused by the API.
+        "requires_target_selection": requires_target_selection,
     }
     if target_candidates is not None:
         decision["target_candidates"] = target_candidates
@@ -147,9 +159,17 @@ def _decision(
 
 
 def detect(
-    df: pd.DataFrame, profile: dict, declared_target: str | None = None, feedback: list[dict] | None = None
+    df: pd.DataFrame,
+    profile: dict,
+    declared_target: str | None = None,
+    feedback: list[dict] | None = None,
+    learning_type: str = "auto",
 ) -> dict:
-    """`feedback` (Phase 1 revision loop): earlier proposals a human rejected. Every
+    """`learning_type` is the user's stated goal: "unsupervised" goes straight to clustering,
+    "supervised" never falls back to clustering on its own and always asks the reviewer to
+    pick the target, "auto" infers it from the data.
+
+    `feedback` (Phase 1 revision loop): earlier proposals a human rejected. Every
     previously-proposed target is excluded from this pass, so a rejection moves the
     proposal to the next-ranked candidate (or to clustering when none remain) instead of
     re-proposing the same answer."""
@@ -165,6 +185,12 @@ def detect(
          f"{sorted(rejected_targets) or 'none (clustering was rejected)'}."]
         if feedback else []
     )
+
+    if learning_type == "unsupervised":
+        return _decision(
+            "clustering", None, 0.95,
+            ["You chose to find groups without a target column, so no target is inferred — clustering."],
+        )
 
     if declared_target:
         if declared_target not in columns:
@@ -197,6 +223,22 @@ def detect(
 
     ranked = _rank_target_candidates(df, candidates, columns)
     top = ranked[0]
+    fallback_score = (
+        CLUSTERING_FALLBACK_SCORE_CONTINUOUS if top["problem_type"] == "regression" else CLUSTERING_FALLBACK_SCORE
+    )
+    if learning_type != "supervised" and top["score"] < fallback_score:
+        return _decision(
+            "clustering",
+            None,
+            0.5,
+            [
+                *revision_note,
+                f"No target declared and no column looks like an outcome (best candidate '{top['column']}' "
+                f"scored {top['score']} < {CLUSTERING_FALLBACK_SCORE}) — proposing unsupervised clustering.",
+                "Low-confidence: if one of the candidate columns below is really the outcome, pick it instead.",
+            ],
+            target_candidates=ranked,
+        )
     problem_type, base_confidence, reason = _classify_target_dtype(df[top["column"]])
     confidence = min(base_confidence, WEAK_SIGNAL_CONFIDENCE_CAP)
     return _decision(
@@ -208,7 +250,10 @@ def detect(
             f"No explicit target declared — ranked {len(ranked)} candidate column(s) by name pattern, "
             f"cardinality, data type, and position; '{top['column']}' scored highest.",
             reason,
-            "This is a low-confidence structural guess; please confirm or pick a different candidate below.",
+            "This is only a suggestion based on column names and value counts — please select the "
+            "target column yourself below (or choose clustering if there is nothing to predict).",
         ],
         target_candidates=ranked,
+        # Only an exact conventional name (target/label/y/class/...) is trusted enough to pre-select.
+        requires_target_selection=top["column"].strip().lower().replace(" ", "_") not in _STRONG_TARGET_NAMES,
     )

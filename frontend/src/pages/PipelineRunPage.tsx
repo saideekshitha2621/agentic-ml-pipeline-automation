@@ -251,12 +251,15 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
     problem_type: string;
     reasoning: string[];
   }[];
+  const requiresTargetSelection = !!decision.decision_json.requires_target_selection;
+  const [targetPicked, setTargetPicked] = useState(false);
   const [overrideType, setOverrideType] = useState(proposedType ?? "clustering");
   const [overrideTargetColumn, setOverrideTargetColumn] = useState<string | null | undefined>(proposedTargetColumn);
 
   const selectCandidate = (candidate: { column: string; problem_type: string }) => {
     setOverrideTargetColumn(candidate.column);
     setOverrideType(candidate.problem_type);
+    setTargetPicked(true);
   };
 
   return (
@@ -294,7 +297,9 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
       {isProblemDetection && targetCandidates.length > 0 && (
         <Box sx={{ mb: 2 }}>
           <Typography variant="body2" gutterBottom>
-            Target column candidates (ranked by name pattern, cardinality, data type, and position):
+            {requiresTargetSelection
+              ? "Select the column you want to predict (the highlighted one is only a suggestion):"
+              : "Target column candidates (ranked by column name and value distribution):"}
           </Typography>
           <Stack spacing={0.5}>
             {targetCandidates.map((c) => (
@@ -323,7 +328,10 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
               label={t}
               size="small"
               color={overrideType === t ? "primary" : "default"}
-              onClick={() => setOverrideType(t)}
+              onClick={() => {
+                setOverrideType(t);
+                if (t === "clustering") setTargetPicked(true);
+              }}
             />
           ))}
         </Stack>
@@ -338,7 +346,7 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
         <Button
           variant="contained"
           color="success"
-          disabled={review.isPending || !reviewedBy}
+          disabled={review.isPending || !reviewedBy || requiresTargetSelection}
           onClick={() =>
             review.mutate({ decisionId: decision.id, action: "approve", reviewed_by: reviewedBy })
           }
@@ -351,7 +359,8 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
             disabled={
               review.isPending ||
               !reviewedBy ||
-              (overrideType === proposedType && overrideTargetColumn === proposedTargetColumn)
+              (requiresTargetSelection && overrideType !== "clustering" && !targetPicked) ||
+              (!requiresTargetSelection && overrideType === proposedType && overrideTargetColumn === proposedTargetColumn)
             }
             onClick={() =>
               review.mutate({

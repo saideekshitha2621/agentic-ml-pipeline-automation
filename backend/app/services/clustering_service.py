@@ -1,11 +1,15 @@
 """Runs every registered clustering plugin over a config-driven hyperparameter grid."""
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 
 from app.core.config import DEFAULT_HYPERPARAMETER_CONFIG
 from app.plugins import PLUGIN_REGISTRY
 from app.plugins.base import PluginRun
+
+logger = logging.getLogger(__name__)
 
 
 def run_all(
@@ -34,14 +38,21 @@ def run_all(
             progress_cb((i - 1) / total * 90, f"Running {name}...")
         if on_algorithm_status:
             on_algorithm_status(name, "running")
+        error = None
         try:
             runs = plugin.run(X, merged[name])
-        except Exception:
-            runs = []
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Clustering plugin %s crashed", name)
+            runs, error = [], f"{type(exc).__name__}: {exc}"
         all_runs.extend(runs)
         if on_algorithm_status:
             on_algorithm_status(name, "completed" if runs else "failed")
         if progress_cb:
-            progress_cb(i / total * 90, f"{name} completed: {len(runs)} usable run(s).")
+            if error:
+                progress_cb(i / total * 90, f"{name} failed: {error}")
+            elif not runs:
+                progress_cb(i / total * 90, f"{name} produced no usable run (every setting failed or found <2 clusters).")
+            else:
+                progress_cb(i / total * 90, f"{name} completed: {len(runs)} usable run(s).")
 
     return all_runs
