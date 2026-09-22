@@ -158,21 +158,35 @@ export function TrainingProgressContent({ progress }: { progress: TrainingProgre
   );
 }
 
+// Classification reports f1_macro, regression reports r2 (see hpo_service.py's
+// _PROBLEM_TYPE_CONFIG) — this component isn't handed problem_type, so the key metric is
+// picked from whichever of these keys is actually present in the results.
+const _HPO_METRIC_PRIORITY: { key: string; label: string }[] = [
+  { key: "f1_macro", label: "F1" },
+  { key: "r2", label: "R²" },
+];
+
 export function HPOContent({ decision }: { decision: AgentDecision }) {
   const results = (decision.decision_json.results ?? []) as {
     algorithm: string; skipped?: boolean; baseline_metrics?: Record<string, number>; optimized_metrics?: Record<string, number>; best_params?: Record<string, unknown>; n_trials?: number;
   }[];
+  const metric = _HPO_METRIC_PRIORITY.find((m) =>
+    results.some((r) => !r.skipped && r.baseline_metrics && m.key in r.baseline_metrics)
+  ) ?? _HPO_METRIC_PRIORITY[0];
   return (
     <Table size="small">
       <TableHead>
-        <TableRow><TableCell>Algorithm</TableCell><TableCell>Baseline F1</TableCell><TableCell>Optimized F1</TableCell><TableCell>Best params</TableCell><TableCell align="right">Trials</TableCell></TableRow>
+        <TableRow>
+          <TableCell>Algorithm</TableCell><TableCell>Baseline {metric.label}</TableCell><TableCell>Optimized {metric.label}</TableCell>
+          <TableCell>Best params</TableCell><TableCell align="right">Trials</TableCell>
+        </TableRow>
       </TableHead>
       <TableBody>
         {results.map((r) => (
           <TableRow key={r.algorithm}>
             <TableCell>{r.algorithm.replace(/_/g, " ")}</TableCell>
-            <TableCell>{r.skipped ? "—" : r.baseline_metrics?.f1_macro?.toFixed(3)}</TableCell>
-            <TableCell>{r.skipped ? "—" : r.optimized_metrics?.f1_macro?.toFixed(3)}</TableCell>
+            <TableCell>{r.skipped ? "—" : r.baseline_metrics?.[metric.key]?.toFixed(3)}</TableCell>
+            <TableCell>{r.skipped ? "—" : r.optimized_metrics?.[metric.key]?.toFixed(3)}</TableCell>
             <TableCell>{r.skipped ? "n/a" : JSON.stringify(r.best_params)}</TableCell>
             <TableCell align="right">{r.n_trials ?? "—"}</TableCell>
           </TableRow>
