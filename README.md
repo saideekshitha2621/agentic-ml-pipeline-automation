@@ -7,10 +7,13 @@ This repo has two ways to use the pipeline:
 - **This package** (`ml_automation/` + `cli.py` / `app.py`): a Streamlit app and headless
   CLI — good for local/single-user use.
 - **`backend/` + `frontend/`**: a full FastAPI + React/TypeScript/MUI web platform built on
-  top of this same core package, adding Spectral/Birch/OPTICS clustering, a plugin
-  framework, persistence, and Excel/PDF export. See [ARCHITECTURE.md](ARCHITECTURE.md) for
-  the design and `backend/README.md` / `frontend/README.md`-equivalent run instructions
-  below.
+  top of this same core package. Uploading a dataset launches an **agentic pipeline**
+  (profiling → cleaning → transformation → training → tuning → evaluation) that pauses at
+  human-in-the-loop checkpoints for review, and finishes with a business report (PDF export)
+  and a prediction playground — see [AGENTIC_WORKFLOW.md](AGENTIC_WORKFLOW.md). Also adds
+  Spectral/Birch/OPTICS clustering and a plugin framework used internally by that pipeline.
+  See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and `backend/README.md` /
+  `frontend/README.md`-equivalent run instructions below.
 
   ```
   # backend (from backend/)

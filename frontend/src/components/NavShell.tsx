@@ -11,21 +11,7 @@ import {
   Typography,
   Chip,
 } from "@mui/material";
-import {
-  Dashboard,
-  UploadFile,
-  FactCheck,
-  Tune,
-  ScatterPlot,
-  PlayCircle,
-  Leaderboard,
-  CompareArrows,
-  HowToReg,
-  BarChart,
-  Description,
-  SmartToy,
-  Science,
-} from "@mui/icons-material";
+import { Dashboard, UploadFile, FactCheck, SmartToy, Science } from "@mui/icons-material";
 import { useLocation, useNavigate } from "react-router-dom";
 import { useWorkspace } from "./WorkspaceContext";
 
@@ -34,20 +20,12 @@ const DRAWER_WIDTH = 260;
 export default function NavShell({ children }: { children: ReactNode }) {
   const navigate = useNavigate();
   const location = useLocation();
-  const { datasetId, jobId, pipelineRunId } = useWorkspace();
+  const { datasetId, pipelineRunId } = useWorkspace();
 
   const navItems = [
     { label: "Dashboard", icon: <Dashboard />, path: "/" },
     { label: "Upload Dataset", icon: <UploadFile />, path: "/upload" },
     { label: "Data Quality", icon: <FactCheck />, path: datasetId ? `/datasets/${datasetId}/quality` : null },
-    { label: "Preprocessing Review", icon: <Tune />, path: datasetId ? `/datasets/${datasetId}/preprocessing` : null },
-    { label: "Dimensionality Reduction", icon: <ScatterPlot />, path: datasetId ? `/datasets/${datasetId}/pca` : null },
-    { label: "Model Execution", icon: <PlayCircle />, path: datasetId ? `/datasets/${datasetId}/execution` : null },
-    { label: "Leaderboard", icon: <Leaderboard />, path: jobId ? `/jobs/${jobId}/leaderboard` : null },
-    { label: "Model Comparison", icon: <CompareArrows />, path: jobId ? `/jobs/${jobId}/comparison` : null },
-    { label: "HITL Approval", icon: <HowToReg />, path: jobId ? `/jobs/${jobId}/approval` : null },
-    { label: "Visualizations", icon: <BarChart />, path: jobId ? `/jobs/${jobId}/visualization` : null },
-    { label: "Reports", icon: <Description />, path: jobId ? `/jobs/${jobId}/reports` : null },
     {
       label: "Agent Pipeline Run",
       icon: <SmartToy />,
@@ -93,7 +71,6 @@ export default function NavShell({ children }: { children: ReactNode }) {
         </List>
         <Box sx={{ p: 2, mt: "auto" }}>
           {datasetId && <Chip size="small" label={`dataset: ${datasetId.slice(0, 8)}`} sx={{ mb: 1, display: "block" }} />}
-          {jobId && <Chip size="small" label={`job: ${jobId.slice(0, 8)}`} color="secondary" />}
         </Box>
       </Drawer>
       <Box component="main" sx={{ flexGrow: 1, p: 3, width: `calc(100% - ${DRAWER_WIDTH}px)` }}>

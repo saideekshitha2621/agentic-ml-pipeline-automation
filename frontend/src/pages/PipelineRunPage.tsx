@@ -342,11 +342,11 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
       <Stack direction="row" spacing={2}>
         {(() => {
           // For problem_detection, exactly one of these two buttons is ever active: "Approve
-          // as proposed" while the reviewer hasn't touched the suggestion, "Confirm ..." once
-          // they've picked something different (or, when the suggestion isn't trusted enough
-          // to auto-select, once they've picked anything at all).
+          // as proposed" while the reviewer hasn't touched the suggestion (the backend accepts
+          // this even when requiresTargetSelection is true — see routers/pipeline.py), "Confirm
+          // ..." once they've picked something different.
           const unchanged = !isProblemDetection ||
-            (overrideType === proposedType && overrideTargetColumn === proposedTargetColumn && !requiresTargetSelection);
+            (overrideType === proposedType && overrideTargetColumn === proposedTargetColumn);
           return (
             <Button
               variant="contained"
@@ -369,7 +369,7 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
               // A target must be set unless clustering is chosen.
               (overrideType !== "clustering" && !overrideTargetColumn) ||
               // Nothing to confirm that "Approve as proposed" doesn't already cover.
-              (!requiresTargetSelection && overrideType === proposedType && overrideTargetColumn === proposedTargetColumn)
+              (overrideType === proposedType && overrideTargetColumn === proposedTargetColumn)
             }
             onClick={() =>
               review.mutate({

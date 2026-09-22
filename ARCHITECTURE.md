@@ -29,12 +29,7 @@ ML Automation/
 │   │   │   └── models.py          # ORM: Dataset, PreprocessingPlan, Job, ClusterRun, Approval
 │   │   ├── schemas/                # Pydantic request/response models (1 file per resource)
 │   │   │   ├── dataset.py
-│   │   │   ├── preprocessing.py
-│   │   │   ├── pca.py
-│   │   │   ├── job.py
-│   │   │   ├── leaderboard.py
-│   │   │   ├── approval.py
-│   │   │   └── visualization.py
+│   │   │   └── pipeline.py
 │   │   ├── services/                # business logic, orchestrates ml_automation + plugins
 │   │   │   ├── profiling_service.py     # data quality score, outliers, category suggestions
 │   │   │   ├── preprocessing_service.py
@@ -57,13 +52,10 @@ ML Automation/
 │   │   │   └── optics_plugin.py
 │   │   ├── routers/                 # thin HTTP layer, 1 file per screen/resource
 │   │   │   ├── datasets.py
-│   │   │   ├── preprocessing.py
-│   │   │   ├── pca.py
-│   │   │   ├── jobs.py
-│   │   │   ├── leaderboard.py
-│   │   │   ├── approval.py
-│   │   │   ├── visualizations.py
-│   │   │   └── reports.py
+│   │   │   ├── pipeline.py          # agentic pipeline runs, HITL review, reports
+│   │   │   ├── prediction.py
+│   │   │   ├── chat.py
+│   │   │   └── monitoring.py
 │   │   └── storage/                 # runtime: uploaded CSVs, exports (gitignored)
 │   ├── tests/
 │   │   ├── test_preprocessing_service.py
@@ -77,25 +69,17 @@ ML Automation/
 │   │   ├── api/                     # typed API client + React Query hooks, 1 file/resource
 │   │   │   ├── client.ts
 │   │   │   ├── datasets.ts
-│   │   │   ├── preprocessing.ts
-│   │   │   ├── pca.ts
-│   │   │   ├── jobs.ts
-│   │   │   ├── leaderboard.ts
-│   │   │   ├── approval.ts
-│   │   │   └── reports.ts
-│   │   ├── pages/                   # one component per screen (11 screens)
+│   │   │   ├── pipeline.ts
+│   │   │   ├── prediction.ts
+│   │   │   └── chat.ts
+│   │   ├── pages/                   # one component per screen
 │   │   │   ├── DashboardPage.tsx
 │   │   │   ├── UploadPage.tsx
-│   │   │   ├── DataQualityPage.tsx
-│   │   │   ├── PreprocessingReviewPage.tsx
-│   │   │   ├── PCAPage.tsx
-│   │   │   ├── ModelExecutionPage.tsx
-│   │   │   ├── LeaderboardPage.tsx
-│   │   │   ├── ComparisonPage.tsx
-│   │   │   ├── ApprovalPage.tsx
-│   │   │   ├── VisualizationPage.tsx
-│   │   │   └── ReportsPage.tsx
-│   │   ├── components/              # shared: NavShell, DataTable, MetricCard, ScatterChart...
+│   │   │   ├── DataQualityPage.tsx     # standalone profiling view, opened from the Dashboard
+│   │   │   ├── PipelineRunPage.tsx     # the agentic run: HITL review + built-in report
+│   │   │   └── PredictionPlaygroundPage.tsx
+│   │   ├── components/              # shared: NavShell, MetricCard, pipeline/ (ChatPanel,
+│   │   │   │                         # StageContent, ExecutiveSummaryCard)
 │   │   ├── types/                   # TS types mirroring backend Pydantic schemas
 │   │   ├── App.tsx                  # router + MUI theme + layout shell
 │   │   ├── theme.ts
@@ -133,11 +117,12 @@ saved per job — "configuration-driven execution"), and executes every combinat
 Spectral/Birch/OPTICS (or a future algorithm) means adding one file — no router or service
 change required.
 
-**Background execution:** `POST /jobs` returns immediately with `job_id` and status `queued`;
-actual training runs in a FastAPI `BackgroundTasks` thread (MVP-appropriate — the roadmap below
-calls out swapping this for Celery/RQ + Redis once concurrent multi-user load requires it). Progress
-and log lines are written to the `Job` row (`progress_pct`, `log_lines` JSON array) so the frontend
-can poll `GET /jobs/{id}` for the Execution Screen's progress bar and log tail.
+**Background execution:** starting a pipeline run (`POST /pipeline-runs`) returns immediately;
+the orchestrator (`app/agents/pipeline_graph.py`) advances the run through an in-process task
+queue (`task_queue_service`, bounded and serialized per run — the roadmap below calls out
+swapping this for Celery/RQ + Redis once concurrent multi-user load requires it). Training still
+creates a `Job` row internally (`progress_pct`, `training_status_json`) so the frontend can poll
+`GET /pipeline-runs/{id}/training-progress` for the stepper's progress bar.
 
 **Storage:** uploaded CSVs and export artifacts live on local disk under `backend/app/storage/`
 (swap for S3/Blob storage in production — see roadmap). Structured metadata (datasets, plans,
@@ -145,23 +130,26 @@ jobs, runs, approvals) lives in the relational DB described below.
 
 ## 3. Frontend Architecture
 
-- **Routing/layout:** `App.tsx` renders an MUI `Drawer` + `AppBar` shell with react-router routes
-  for the 11 screens, mirroring the pipeline's stage order so the nav doubles as a progress map
-  (same idea as the existing Streamlit sidebar stepper, ported to a proper SPA).
+Upload now goes straight into the **agentic pipeline** (`PipelineRunPage`): the agent profiles,
+cleans, transforms, trains, tunes and evaluates the dataset itself, pausing at HITL gates for
+review (`DecisionReviewCard`) and finishing with a built-in report (PDF export). A separate
+manual, screen-by-screen pipeline (preprocessing review → PCA → model execution → leaderboard →
+comparison → approval → visualizations → reports) existed earlier but had no way to reach it from
+the UI and was removed; `Dataset`/`Job`/`ClusterRun`/etc. tables and their services still exist
+because the agentic pipeline uses them internally.
+
+- **Routing/layout:** `App.tsx` renders an MUI `Drawer` + `AppBar` shell with react-router routes:
+  Dashboard, Upload, a standalone Data Quality view (opened from the Dashboard's dataset table),
+  the agentic Pipeline Run screen, and the Prediction Playground.
 - **Data fetching:** every screen uses **React Query** (`useQuery`/`useMutation`) against the
-  typed client in `src/api/`, never raw `fetch` in components. Mutations (upload, save plan,
-  apply PCA, start job, approve model) invalidate the relevant query keys so downstream screens
-  always reflect the latest server state — this is what lets a user go back and change the
-  preprocessing plan without stale data leaking into the leaderboard.
-- **Polling:** `ModelExecutionPage` uses `useQuery` with `refetchInterval` while `job.status ===
-  'running'` to drive the progress bar and log tail, stopping automatically on `completed`/`failed`.
-- **Charts:** Recharts for standard bar/line (leaderboard metric bars, explained-variance,
-  cluster-size bars); Plotly (`react-plotly.js`) for the PCA/cluster scatter plots, since Plotly's
-  built-in zoom/pan/hover is a better fit for exploring point clouds than Recharts.
-- **State:** server state lives entirely in React Query's cache; the only client-only state is
-  form inputs mid-edit (e.g. the preprocessing plan editor before "Save") and the current
-  `datasetId`/`jobId` in the URL (`/jobs/:jobId/leaderboard`), so a screen is always resumable
-  from a shared link/refresh.
+  typed client in `src/api/`, never raw `fetch` in components. Reviewing a HITL decision
+  (`useReviewDecision`) invalidates the run's decisions/executive-summary so the stepper and
+  report reflect the latest server state immediately.
+- **Polling:** `PipelineRunPage` polls training progress and pipeline-run status while a run is
+  active, stopping automatically once the run reaches `completed`/`failed`.
+- **State:** server state lives entirely in React Query's cache; the only client-only state is the
+  current `datasetId`/`pipelineRunId` in `WorkspaceContext` (persisted to `sessionStorage`), so a
+  screen is always resumable from a shared link/refresh.
 
 ## 4. Database Schema
 
@@ -256,58 +244,20 @@ All under `/api/v1`. Bodies/responses are Pydantic-validated; errors follow
 | `GET /datasets` | Upload history / dashboard list | — | `Dataset[]` |
 | `GET /datasets/{id}` | Dataset summary for Dashboard | — | `Dataset` |
 | `GET /datasets/{id}/profile` | Data Quality screen | — | `DataProfile` (missing table, duplicates, outliers, category-standardization suggestions) |
-| `GET /datasets/{id}/preprocessing-plan` | Preprocessing Review screen (auto-detected defaults) | — | `PreprocessingPlan` |
-| `PUT /datasets/{id}/preprocessing-plan` | Save human edits | `PreprocessingPlanUpdate` | `PreprocessingPlan` |
-| `POST /datasets/{id}/preprocess` | Apply the active plan | `{plan_id}` | `PreprocessingReport` |
-| `GET /datasets/{id}/pca-preview` | PCA screen: variance curve before committing | — | `{explained_variance_ratio, cumulative_variance}` |
-| `POST /datasets/{id}/pca` | Apply PCA at chosen variance/component target | `{n_components}` | `PCAReport` |
-| `POST /jobs` | Start clustering run (Model Execution screen) | `{dataset_id, preprocessing_plan_id, config}` | `Job` (status=queued) |
-| `GET /jobs/{id}` | Poll status/progress/logs | — | `Job` |
-| `GET /jobs/{id}/leaderboard` | Leaderboard screen | — | `ClusterRun[]` (sorted by rank) |
-| `GET /jobs/{id}/compare?run_ids=a,b,c` | Model Comparison screen | — | `ClusterRun[]` with aligned metrics |
-| `GET /jobs/{id}/recommendations` | HITL Approval screen: top 3 + rationale | — | `Recommendation[]` (strengths/weaknesses copy) |
-| `POST /jobs/{id}/approve` | Human approves final model | `{cluster_run_id, approved_by, notes?}` | `Approval` |
-| `GET /jobs/{id}/visualizations` | Visualization screen data | — | `{scatter: [...], cluster_sizes: [...], metric_comparison: [...]}` |
-| `GET /jobs/{id}/interpretation` | Cluster explanation engine output | — | `ClusterInterpretation` |
-| `GET /jobs/{id}/export?format=csv\|xlsx\|pdf` | Reports screen download | — | file stream |
+| `DELETE /datasets/{id}` | Delete a dataset (and its plans/jobs/pipeline runs) | — | 204 |
+| `POST /pipeline-runs` | Start the agentic pipeline (Upload/Dashboard) | `{dataset_id, learning_type?}` | `PipelineRun` (status=profiling) |
+| `GET /pipeline-runs/{id}` | Poll run status | — | `PipelineRun` |
+| `GET /pipeline-runs/{id}/decisions` | Agent Activity Timeline | — | `AgentDecision[]` |
+| `POST /pipeline-runs/{id}/decisions/{decision_id}/review` | HITL approve/edit/reject a proposed decision | `{action, edits?, reason?, reviewed_by}` | `AgentDecision` |
+| `GET /pipeline-runs/{id}/training-progress` | Per-algorithm training status while `status=training` | — | `{algorithms: [...], job_status, progress_pct}` |
+| `GET /pipeline-runs/{id}/executive-summary` | Executive Summary card, updates as stages complete | — | `ExecutiveSummary` |
+| `GET /pipeline-runs/{id}/recommendation` | Top choice + alternatives once evaluated | — | `AgentRecommendation` |
+| `GET /pipeline-runs/{id}/report` | Full business report (once `status=completed`) | — | `PipelineReport` |
+| `GET /pipeline-runs/{id}/report/export` | Download the report as PDF | — | file stream |
+| `GET /pipeline-runs/{id}/prediction-schema` | Prediction Playground input form | — | feature schema |
+| `POST /pipeline-runs/{id}/predict` | Score a single row against the champion model | row payload | prediction |
 
-## 6. Sample UI Wireframes (text layout)
-
-```
-┌─ Dashboard ─────────────────────────────────────────────┐
-│ AppBar: Unsupervised AutoML          [Upload Dataset]    │
-│ ┌────────────┬────────────┬────────────┬──────────────┐ │
-│ │ Rows: 12.4k│ Columns: 18│ DQ Score:87 │ Missing: 4.2%│ │
-│ └────────────┴────────────┴────────────┴──────────────┘ │
-│ Recent Datasets table (name, uploaded, DQ score, →)      │
-└────────────────────────────────────────────────────────┘
-
-┌─ Preprocessing Review ──────────────────────────────────┐
-│ Left: column list w/ type chips (editable dropdown)      │
-│ Right panel: Impute strategy [median▾] Scaling [Std▾]    │
-│              [x] Drop duplicates   [ ] Enable PCA         │
-│              [Save Plan] [Continue →]                     │
-└────────────────────────────────────────────────────────┘
-
-┌─ Model Execution ───────────────────────────────────────┐
-│ Algorithm chips: KMeans DBSCAN Hierarchical GMM           │
-│                  Spectral Birch OPTICS   [Run Pipeline]   │
-│ Progress: ████████████░░░░░░  62%                         │
-│ Log tail (monospace, auto-scroll)                          │
-└────────────────────────────────────────────────────────┘
-
-┌─ Leaderboard ────────────────────────────────────────────┐
-│ Table: Algorithm | Params | k | Noise | Sil | DB | CH |Rank│
-│ Row click → select for Comparison  [Compare Selected]      │
-└────────────────────────────────────────────────────────┘
-
-┌─ HITL Approval ──────────────────────────────────────────┐
-│ 3 cards: #1 DBSCAN  #2 KMeans  #3 GMM                     │
-│ each: metrics + "Why it ranked here" + [Approve this model]│
-└────────────────────────────────────────────────────────┘
-```
-
-## 7. Implementation Roadmap / Development Phases
+## 6. Implementation Roadmap / Development Phases
 
 | Phase | Scope | Status |
 |---|---|---|
@@ -318,7 +268,7 @@ All under `/api/v1`. Bodies/responses are Pydantic-validated; errors follow
 | **4. Scale-out** | Swap `BackgroundTasks` for Celery/RQ + Redis, swap local disk for S3/Blob, Postgres in prod, multi-tenant dataset isolation | follow-up |
 | **5. Ops** | Docker Compose → CI pipeline, structured logging/metrics, docker healthchecks, e2e tests (Playwright) on top of the unit tests added in phase 1-2 | follow-up |
 
-## 8. Development Phases — this session's build order
+## 7. Development Phases — this session's build order
 
 1. Backend: DB models + migrations-free `create_all` bootstrap
 2. Backend: plugin framework + 7 clustering plugins

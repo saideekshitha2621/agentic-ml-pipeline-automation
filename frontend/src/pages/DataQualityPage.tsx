@@ -1,8 +1,7 @@
-import { useParams, useNavigate } from "react-router-dom";
+import { useParams } from "react-router-dom";
 import {
   Alert,
   Box,
-  Button,
   Chip,
   LinearProgress,
   Paper,
@@ -18,7 +17,6 @@ import { useDatasetProfile } from "../api/datasets";
 
 export default function DataQualityPage() {
   const { datasetId } = useParams();
-  const navigate = useNavigate();
   const { data: profile, isLoading } = useDatasetProfile(datasetId);
 
   if (isLoading || !profile) return <LinearProgress />;
@@ -27,9 +25,6 @@ export default function DataQualityPage() {
     <Stack spacing={3}>
       <Box sx={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
         <Typography variant="h4">Data Quality</Typography>
-        <Button variant="contained" onClick={() => navigate(`/datasets/${datasetId}/preprocessing`)}>
-          Continue to Preprocessing Review →
-        </Button>
       </Box>
 
       <Stack direction="row" spacing={2}>
