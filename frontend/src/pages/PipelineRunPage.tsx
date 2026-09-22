@@ -252,14 +252,12 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
     reasoning: string[];
   }[];
   const requiresTargetSelection = !!decision.decision_json.requires_target_selection;
-  const [targetPicked, setTargetPicked] = useState(false);
   const [overrideType, setOverrideType] = useState(proposedType ?? "clustering");
   const [overrideTargetColumn, setOverrideTargetColumn] = useState<string | null | undefined>(proposedTargetColumn);
 
   const selectCandidate = (candidate: { column: string; problem_type: string }) => {
     setOverrideTargetColumn(candidate.column);
     setOverrideType(candidate.problem_type);
-    setTargetPicked(true);
   };
 
   return (
@@ -330,7 +328,6 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
               color={overrideType === t ? "primary" : "default"}
               onClick={() => {
                 setOverrideType(t);
-                if (t === "clustering") setTargetPicked(true);
               }}
             />
           ))}
@@ -343,23 +340,35 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
       )}
 
       <Stack direction="row" spacing={2}>
-        <Button
-          variant="contained"
-          color="success"
-          disabled={review.isPending || !reviewedBy || requiresTargetSelection}
-          onClick={() =>
-            review.mutate({ decisionId: decision.id, action: "approve", reviewed_by: reviewedBy })
-          }
-        >
-          Approve as proposed
-        </Button>
+        {(() => {
+          // For problem_detection, exactly one of these two buttons is ever active: "Approve
+          // as proposed" while the reviewer hasn't touched the suggestion, "Confirm ..." once
+          // they've picked something different (or, when the suggestion isn't trusted enough
+          // to auto-select, once they've picked anything at all).
+          const unchanged = !isProblemDetection ||
+            (overrideType === proposedType && overrideTargetColumn === proposedTargetColumn && !requiresTargetSelection);
+          return (
+            <Button
+              variant="contained"
+              color="success"
+              disabled={review.isPending || !reviewedBy || !unchanged}
+              onClick={() =>
+                review.mutate({ decisionId: decision.id, action: "approve", reviewed_by: reviewedBy })
+              }
+            >
+              Approve as proposed
+            </Button>
+          );
+        })()}
         {isProblemDetection && (
           <Button
             variant="outlined"
             disabled={
               review.isPending ||
               !reviewedBy ||
-              (requiresTargetSelection && overrideType !== "clustering" && !targetPicked) ||
+              // A target must be set unless clustering is chosen.
+              (overrideType !== "clustering" && !overrideTargetColumn) ||
+              // Nothing to confirm that "Approve as proposed" doesn't already cover.
               (!requiresTargetSelection && overrideType === proposedType && overrideTargetColumn === proposedTargetColumn)
             }
             onClick={() =>

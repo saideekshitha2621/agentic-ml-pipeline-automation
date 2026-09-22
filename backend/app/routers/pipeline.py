@@ -84,14 +84,13 @@ def review_decision(
     if decision.status != "proposed":
         raise HTTPException(409, "This decision has already been reviewed.")
 
-    if decision.decision_json.get("requires_target_selection"):
-        # The proposed target is only a guess: force an explicit human choice.
-        if body.action == "approve":
-            raise HTTPException(
-                409, "The target column is only a suggestion — select the target column (or clustering) explicitly."
-            )
+    if decision.decision_json.get("requires_target_selection") and body.action == "edit":
+        # The proposed target was only a guess. An "approve" here is fine — the reviewer saw
+        # the candidates and chose to accept the suggestion as-is (the UI only allows that
+        # button while nothing has been changed). An "edit" to something other than clustering
+        # must still name an actual target column, though.
         edits = body.edits or {}
-        if body.action == "edit" and edits.get("problem_type") != "clustering" and not edits.get("target_column"):
+        if edits.get("problem_type") != "clustering" and not edits.get("target_column"):
             raise HTTPException(400, "Select a target column, or choose clustering.")
 
     if body.action == "approve":
