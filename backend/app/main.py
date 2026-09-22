@@ -14,7 +14,7 @@ from app.routers import (
     prediction,
 )
 
-app = FastAPI(title="Unsupervised AutoML Platform", version="1.0.0")
+app = FastAPI(title="Agentic AutoML Platform", version="1.0.0")
 
 app.add_middleware(
     CORSMiddleware,

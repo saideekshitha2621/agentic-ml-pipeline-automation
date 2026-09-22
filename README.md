@@ -1,17 +1,19 @@
-# Unsupervised ML Automation Pipeline (with Human-in-the-Loop)
+# ML Automation Pipeline (with Human-in-the-Loop)
 
-Automates preprocessing, clustering, evaluation, and ranking for unsupervised
-learning — while keeping **final model selection under human control**.
+Automates preprocessing, model training, evaluation, and ranking — for classification,
+regression, and clustering — while keeping **final model selection under human control**.
 
 This repo has two ways to use the pipeline:
 - **This package** (`ml_automation/` + `cli.py` / `app.py`): a Streamlit app and headless
-  CLI — good for local/single-user use.
+  CLI focused on **unsupervised clustering** — good for local/single-user use.
 - **`backend/` + `frontend/`**: a full FastAPI + React/TypeScript/MUI web platform built on
   top of this same core package. Uploading a dataset launches an **agentic pipeline**
-  (profiling → cleaning → transformation → training → tuning → evaluation) that pauses at
-  human-in-the-loop checkpoints for review, and finishes with a business report (PDF export)
-  and a prediction playground — see [AGENTIC_WORKFLOW.md](AGENTIC_WORKFLOW.md). Also adds
-  Spectral/Birch/OPTICS clustering and a plugin framework used internally by that pipeline.
+  (profiling → cleaning → transformation → training → tuning → evaluation) that detects
+  whether the dataset calls for classification, regression, or clustering (or takes an
+  explicit supervised/unsupervised choice from the user), pauses at human-in-the-loop
+  checkpoints for review, and finishes with a business report (PDF export) and a prediction
+  playground — see [AGENTIC_WORKFLOW.md](AGENTIC_WORKFLOW.md). Also adds Spectral/Birch/OPTICS
+  clustering and a plugin framework used internally by that pipeline.
   See [ARCHITECTURE.md](ARCHITECTURE.md) for the design and `backend/README.md` /
   `frontend/README.md`-equivalent run instructions below.
 

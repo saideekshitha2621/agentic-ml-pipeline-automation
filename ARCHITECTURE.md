@@ -1,7 +1,10 @@
-# Unsupervised AutoML Platform — Architecture
+# Agentic AutoML Platform — Architecture
 
-Monorepo containing the existing `ml_automation` core pipeline (reused, not duplicated),
-a FastAPI backend service layer around it, and a React/TypeScript/MUI frontend.
+Monorepo containing the existing `ml_automation` core pipeline (unsupervised clustering,
+reused, not duplicated), a FastAPI backend service layer around it, and a React/TypeScript/MUI
+frontend. The backend's agentic pipeline extends beyond clustering: it detects whether a dataset
+calls for classification, regression, or clustering (or takes an explicit `learning_type` from the
+user) and runs the matching training/evaluation path end to end.
 
 ## 1. Folder Structure
 
@@ -245,7 +248,7 @@ All under `/api/v1`. Bodies/responses are Pydantic-validated; errors follow
 | `GET /datasets/{id}` | Dataset summary for Dashboard | — | `Dataset` |
 | `GET /datasets/{id}/profile` | Data Quality screen | — | `DataProfile` (missing table, duplicates, outliers, category-standardization suggestions) |
 | `DELETE /datasets/{id}` | Delete a dataset (and its plans/jobs/pipeline runs) | — | 204 |
-| `POST /pipeline-runs` | Start the agentic pipeline (Upload/Dashboard) | `{dataset_id, learning_type?}` | `PipelineRun` (status=profiling) |
+| `POST /pipeline-runs` | Start the agentic pipeline (Upload/Dashboard) | `{dataset_id, target_column?, learning_type?}` (`learning_type`: `auto` \| `supervised` \| `unsupervised`, default `auto`) | `PipelineRun` (status=profiling) |
 | `GET /pipeline-runs/{id}` | Poll run status | — | `PipelineRun` |
 | `GET /pipeline-runs/{id}/decisions` | Agent Activity Timeline | — | `AgentDecision[]` |
 | `POST /pipeline-runs/{id}/decisions/{decision_id}/review` | HITL approve/edit/reject a proposed decision | `{action, edits?, reason?, reviewed_by}` | `AgentDecision` |
