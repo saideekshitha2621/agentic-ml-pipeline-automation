@@ -30,8 +30,19 @@ for d in (DATASETS_DIR, LABELS_DIR, PREDICTIONS_DIR, EXPORTS_DIR, JOBS_DIR, MODE
     d.mkdir(parents=True, exist_ok=True)
 
 # Unset by default — llm_service falls back to deterministic templates for every narrative
-# and the chat endpoint returns a "no LLM configured" message rather than failing. Set
-# exactly one of these three (see backend/.env) to enable that provider.
+# and the chat endpoint returns a "no LLM configured" message rather than failing. Set at
+# least one of these three (see backend/.env) to enable that provider.
+#
+# Multiple keys per provider (recommended for production — a quota/rate-limit hit on one
+# key fails over to the next instead of stalling): in addition to the single var below,
+# also set any of
+#   <PROVIDER>_API_KEY_1=..., <PROVIDER>_API_KEY_2=..., ...   (numbered, any count)
+#   <PROVIDER>_API_KEYS=key-one,key-two,key-three             (comma-separated)
+# for PROVIDER in ANTHROPIC / OPENAI / GEMINI. All variants found are pooled together and
+# deduplicated — see app/services/llm_key_manager.py for the health-tracking/failover
+# logic, and LLM_KEY_WARNING_THRESHOLD / LLM_KEY_EXHAUSTED_THRESHOLD /
+# LLM_KEY_COOLDOWN_SECONDS / LLM_KEY_AUTH_COOLDOWN_SECONDS / LLM_MAX_RETRIES_PER_REQUEST /
+# LLM_PROVIDER_ORDER for its configurable thresholds.
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY")
 ANTHROPIC_MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")

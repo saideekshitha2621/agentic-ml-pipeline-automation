@@ -18,8 +18,14 @@ from app.services import llm_service, task_queue_service
 def _isolated_environment(monkeypatch):
     for name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
         monkeypatch.setattr(llm_service, name, None)
+        prefix = name.rsplit("_API_KEY", 1)[0]
+        monkeypatch.delenv(f"{prefix}_API_KEYS", raising=False)
+        for i in range(1, 21):  # llm_key_manager's numbered multi-key variant (non-contiguous scan, 1..20)
+            monkeypatch.delenv(f"{prefix}_API_KEY_{i}", raising=False)
     monkeypatch.setattr(task_queue_service, "BACKEND", "inline")
     monkeypatch.setattr(auth, "API_KEYS", set())
     llm_service.reset_breaker()
+    llm_service.key_manager.reset()
     yield
     llm_service.reset_breaker()
+    llm_service.key_manager.reset()

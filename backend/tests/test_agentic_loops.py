@@ -241,9 +241,10 @@ class _FakeSession:
 
 @pytest.fixture
 def fake_llm(monkeypatch):
-    monkeypatch.setattr(llm_service, "_active_config", lambda: {"provider": "fake", "api_key": "k", "model": "m"})
+    llm_service.key_manager.configure_test_provider("fake", ["k"], model="m")
     monkeypatch.setitem(llm_service._TOOL_SESSIONS, "fake", _FakeSession)
-    return _FakeSession
+    yield _FakeSession
+    llm_service.key_manager.clear_test_provider("fake")
 
 
 def test_tool_loop_executes_tools_and_returns_final_text(fake_llm):
@@ -255,11 +256,11 @@ def test_tool_loop_executes_tools_and_returns_final_text(fake_llm):
     assert '"n_unique"' in fake_llm.last_results[0][1] and fake_llm.last_results[1][1].startswith("error")
 
 
-def test_tool_loop_step_budget_and_unavailable(fake_llm, monkeypatch):
+def test_tool_loop_step_budget_and_unavailable(fake_llm):
     fake_llm.script = [("", [("c", "outlier_report", {})])] * 10
     with pytest.raises(RuntimeError):
         llm_service.run_tool_loop("s", "u", dataset_tools.build_tools(_classification_df()), max_steps=3)
-    monkeypatch.setattr(llm_service, "_active_config", lambda: None)
+    llm_service.key_manager.clear_test_provider("fake")  # simulate nothing configured at all
     with pytest.raises(llm_service.ToolLoopUnavailable):
         llm_service.run_tool_loop("s", "u", [])
 

@@ -7,14 +7,24 @@
 2. `chat()` — the Conversational Q&A endpoint. Builds a grounding context out of a
    pipeline run's own stored artifacts and answers a free-form question against it.
 
-Provider/key configuration is env-var only — set exactly one of ANTHROPIC_API_KEY,
-GEMINI_API_KEY, or OPENAI_API_KEY (see app/core/config.py, checked in that order). Each
-provider's SDK is imported lazily inside a try/except so a package that isn't installed
-just makes that provider unavailable rather than crashing the app.
+Provider/key configuration is env-var driven. The simple case is still exactly one of
+ANTHROPIC_API_KEY, GEMINI_API_KEY, or OPENAI_API_KEY (see app/core/config.py). For
+multiple keys per provider — so a quota/rate-limit hit on one key fails over to the next
+instead of stalling the pipeline — also set `<PROVIDER>_API_KEY_1`, `_2`, `_3`, ... or a
+comma-separated `<PROVIDER>_API_KEYS`; any combination of these is pooled together and
+deduplicated. All of that pooling, health tracking (Healthy/Warning/Exhausted per key),
+and provider-level fallback (e.g. every OpenAI key exhausted -> try Gemini; every Gemini
+key exhausted -> a clear error) lives in `llm_key_manager.py` — this module just supplies
+the env-reading glue and the per-provider transport functions below. Each provider's SDK
+is imported lazily inside a try/except so a package that isn't installed just makes that
+provider unavailable rather than crashing the app.
 """
 from __future__ import annotations
 
+import os
+
 from app.core.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, GEMINI_API_KEY, OPENAI_API_KEY
+from app.services import llm_key_manager as _km
 
 _SYSTEM_EXPLAIN = (
     "You are an AutoML pipeline agent explaining a technical decision to a business "
@@ -24,12 +34,59 @@ _SYSTEM_EXPLAIN = (
 
 _DEFAULT_MODELS = {"anthropic": ANTHROPIC_MODEL, "gemini": "gemini-3.6-flash", "openai": "gpt-4o-mini"}
 
+# Anthropic first (unchanged from the original single-key precedence), then OpenAI, then
+# Gemini — override with LLM_PROVIDER_ORDER="openai,gemini" (comma-separated) if desired.
+_env_order = os.environ.get("LLM_PROVIDER_ORDER")
+_PROVIDER_ORDER = [p.strip() for p in _env_order.split(",") if p.strip()] if _env_order else ["anthropic", "openai", "gemini"]
+
+
+def _pooled_keys(prefix: str, primary: str | None) -> list[str]:
+    """One provider's full key pool: the legacy single env var (kept as a module global so
+    tests can monkeypatch it directly) plus any `_1`/`_2`/... or comma-separated `_KEYS`
+    variants read fresh from the environment, deduplicated, order preserved."""
+    keys: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: str | None) -> None:
+        value = (value or "").strip()
+        if value and value not in seen:
+            seen.add(value)
+            keys.append(value)
+
+    _add(primary)
+    for part in (os.environ.get(f"{prefix}_API_KEYS") or "").split(","):
+        _add(part)
+    # Non-contiguous on purpose: a plain <PREFIX>_API_KEY already covers "key #1", so it's
+    # natural to add a second key as _2 without ever setting a _1. Scan a fixed range
+    # instead of stopping at the first gap.
+    for i in range(1, 21):
+        _add(os.environ.get(f"{prefix}_API_KEY_{i}"))
+    return keys
+
+
+def _resolve_all_keys() -> dict[str, list[str]]:
+    # Read the *current* module globals (not captured at import time) so tests that
+    # monkeypatch ANTHROPIC_API_KEY/GEMINI_API_KEY/OPENAI_API_KEY keep working unchanged.
+    return {
+        "anthropic": _pooled_keys("ANTHROPIC", ANTHROPIC_API_KEY),
+        "openai": _pooled_keys("OPENAI", OPENAI_API_KEY),
+        "gemini": _pooled_keys("GEMINI", GEMINI_API_KEY),
+    }
+
+
+key_manager = _km.KeyManager(_resolve_all_keys, _DEFAULT_MODELS, _PROVIDER_ORDER)
+
 
 def _active_config() -> dict | None:
-    for provider, api_key in (("anthropic", ANTHROPIC_API_KEY), ("gemini", GEMINI_API_KEY), ("openai", OPENAI_API_KEY)):
-        if api_key:
-            return {"provider": provider, "api_key": api_key, "model": _DEFAULT_MODELS[provider]}
-    return None
+    """Single best-next candidate (provider/api_key/model), respecting key health and
+    round-robin rotation. Kept as the stable, single-key-shaped entry point some callers
+    (and tests) use directly; `key_manager.execute()` below is what gives multi-attempt
+    retry-with-failover to the higher-level helpers in this module."""
+    picked = key_manager.next_candidate()
+    if picked is None:
+        return None
+    provider, record = picked
+    return {"provider": provider, "api_key": record.key, "model": key_manager.model_for(provider)}
 
 
 def _call_anthropic(api_key: str, model: str, system: str, messages: list[dict], max_tokens: int) -> str:
@@ -107,7 +164,10 @@ def reset_breaker() -> None:
 
 
 def usage_stats() -> dict:
-    return {**_stats, "breaker_open": breaker_open()}
+    """`keys` is the per-key health board (provider, masked key id, Healthy/Warning/
+    Exhausted status, counts) — safe to expose on an internal monitoring endpoint since no
+    raw key ever appears in it."""
+    return {**_stats, "breaker_open": breaker_open(), "keys": key_manager.status_report()}
 
 
 def _guarded(fn, *args, **kwargs):
@@ -131,32 +191,48 @@ def call(provider: str, api_key: str, model: str, system: str, messages: list[di
     return _guarded(fn, api_key, model, system, messages, max_tokens)
 
 
+def _dispatch_call(provider: str, api_key: str, model: str, system: str, messages: list[dict], max_tokens: int) -> str:
+    """Bare provider call used by `key_manager.execute()` — no `_guarded`/global breaker
+    here; per-key health and cooldown is the key manager's job, so one key's rate limit
+    doesn't block a *different* key or provider from being tried immediately after."""
+    fn = _DISPATCH.get(provider)
+    if fn is None:
+        raise ValueError(f"Unknown LLM provider '{provider}'.")
+    return fn(api_key, model, system, messages, max_tokens)
+
+
 def complete(system: str, user: str, max_tokens: int = 1500) -> str:
-    """Single-shot completion with the active provider; raises ToolLoopUnavailable (defined
-    below) when none is configured, so callers fall back deterministically."""
-    config = _active_config()
-    if config is None:
-        raise ToolLoopUnavailable("no LLM provider configured")
-    return call(config["provider"], config["api_key"], config["model"], system, [{"role": "user", "content": user}], max_tokens)
+    """Completion with automatic key/provider failover; raises ToolLoopUnavailable when
+    nothing is configured at all (callers fall back deterministically), or
+    `llm_key_manager.AllKeysExhaustedError` (a RuntimeError) when every configured key is
+    currently exhausted — both are safe to surface, neither ever contains a raw key."""
+    try:
+        return key_manager.execute(
+            lambda provider, api_key, model: _dispatch_call(provider, api_key, model, system, [{"role": "user", "content": user}], max_tokens)
+        )
+    except _km.NoProviderConfiguredError as exc:
+        raise ToolLoopUnavailable(str(exc)) from exc
 
 
 def is_configured() -> bool:
-    return _active_config() is not None
+    return key_manager.is_configured()
 
 
 def explain(kind: str, context: dict, fallback: str) -> str:
     """`fallback` is the deterministic template string the caller already built — used
-    verbatim when no LLM is configured, and as the safety net if the call fails."""
-    config = _active_config()
-    if config is None:
+    verbatim when no LLM is configured, and as the safety net if every configured key
+    fails (rate-limited, exhausted, or otherwise)."""
+    if not key_manager.is_configured():
         return fallback
     try:
-        text = call(
-            config["provider"], config["api_key"], config["model"], _SYSTEM_EXPLAIN,
-            [{"role": "user", "content": f"Stage: {kind}\nStructured data: {context}\n\nExplain this decision."}],
-            # Generous budget — some providers' newer models spend part of this on internal
-            # reasoning before the visible answer, so a tight limit risks truncation.
-            max_tokens=1024,
+        text = key_manager.execute(
+            lambda provider, api_key, model: _dispatch_call(
+                provider, api_key, model, _SYSTEM_EXPLAIN,
+                [{"role": "user", "content": f"Stage: {kind}\nStructured data: {context}\n\nExplain this decision."}],
+                # Generous budget — some providers' newer models spend part of this on internal
+                # reasoning before the visible answer, so a tight limit risks truncation.
+                1024,
+            )
         )
         return text or fallback
     except Exception:
@@ -164,13 +240,13 @@ def explain(kind: str, context: dict, fallback: str) -> str:
 
 
 def chat(question: str, grounding_context: str, history: list[dict]) -> str:
-    config = _active_config()
-    if config is None:
+    if not key_manager.is_configured():
         return (
             "Conversational Q&A needs an LLM provider configured — set ANTHROPIC_API_KEY, "
-            "GEMINI_API_KEY, or OPENAI_API_KEY in the backend's environment. Once set, I can "
-            "answer questions grounded in this run's dataset profile, agent decisions, and "
-            "model results."
+            "GEMINI_API_KEY, or OPENAI_API_KEY (or their _1/_2/... numbered / _KEYS "
+            "comma-separated multi-key variants) in the backend's environment. Once set, I "
+            "can answer questions grounded in this run's dataset profile, agent decisions, "
+            "and model results."
         )
     try:
         system = (
@@ -182,8 +258,8 @@ def chat(question: str, grounding_context: str, history: list[dict]) -> str:
             f"=== Pipeline run context ===\n{grounding_context}"
         )
         messages = [*history, {"role": "user", "content": question}]
-        return call(config["provider"], config["api_key"], config["model"], system, messages, max_tokens=1200)
-    except Exception as exc:  # noqa: BLE001
+        return key_manager.execute(lambda provider, api_key, model: _dispatch_call(provider, api_key, model, system, messages, 1200))
+    except Exception as exc:  # noqa: BLE001 — AllKeysExhaustedError's message is already key-safe
         return f"Sorry, the chat model call failed: {exc}"
 
 
@@ -365,24 +441,19 @@ def _execute_tool(tool: Tool | None, args: dict) -> tuple[str, bool]:
         return f"error: {exc}", False
 
 
-def run_tool_loop(
-    system: str, user: str, tools: list[Tool], *, max_steps: int = 6, max_tokens: int = 1500
-) -> ToolLoopResult:
-    config = _active_config()
-    if config is None:
-        raise ToolLoopUnavailable("no LLM provider configured")
-    session_cls = _TOOL_SESSIONS.get(config["provider"])
+def _run_tool_loop_once(provider: str, api_key: str, model: str, system: str, user: str, tools: list[Tool], max_steps: int, max_tokens: int) -> ToolLoopResult:
+    session_cls = _TOOL_SESSIONS.get(provider)
     if session_cls is None:
-        raise ToolLoopUnavailable(f"provider '{config['provider']}' has no tool-use adapter")
-
-    if breaker_open():
-        raise ToolLoopUnavailable("LLM temporarily disabled after a rate-limit/quota error")
+        # Only reachable for a future provider registered without a tool-use adapter — the
+        # three built-in providers all have one. Treated as a normal failed attempt so
+        # key_manager.execute() just moves on to the next candidate provider/key.
+        raise RuntimeError(f"provider '{provider}' has no tool-use adapter")
     by_name = {t.name: t for t in tools}
-    session = session_cls(config, system, tools, max_tokens)
+    session = session_cls({"api_key": api_key, "model": model}, system, tools, max_tokens)
     session.send_user(user)
     trace: list[dict] = []
     for _ in range(max_steps):
-        text, calls = _guarded(session.next)
+        text, calls = session.next()
         if not calls:
             return ToolLoopResult(text=text, calls=trace)
         results = []
@@ -392,6 +463,21 @@ def run_tool_loop(
             results.append((call_id, output))
         session.send_results(results)
     raise RuntimeError(f"tool loop exceeded {max_steps} steps without a final answer")
+
+
+def run_tool_loop(
+    system: str, user: str, tools: list[Tool], *, max_steps: int = 6, max_tokens: int = 1500
+) -> ToolLoopResult:
+    """Multi-step tool-use conversation with automatic key/provider failover. A failure
+    (including a quota/rate-limit hit mid-conversation) restarts the whole tool loop fresh
+    against the next available key rather than resuming — a tool-use conversation is tied
+    to one provider's session/client, so it can't be handed off mid-flight."""
+    try:
+        return key_manager.execute(
+            lambda provider, api_key, model: _run_tool_loop_once(provider, api_key, model, system, user, tools, max_steps, max_tokens)
+        )
+    except _km.NoProviderConfiguredError as exc:
+        raise ToolLoopUnavailable(str(exc)) from exc
 
 
 def parse_json_object(text: str) -> dict | None:
