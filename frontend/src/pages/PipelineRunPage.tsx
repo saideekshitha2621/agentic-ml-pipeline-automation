@@ -482,8 +482,12 @@ export default function PipelineRunPage() {
 
       <Stepper activeStep={activeIndex} orientation="vertical">
         {PIPELINE_STAGES.map((stage, i) => {
-          const decision = decisionForAgent(stage.agentName);
           const isActive = i === activeIndex;
+          // Decisions are append-only, so a revision or self-correction retry leaves the previous
+          // pass's later-stage decisions behind. Anything at/after the active stage that is still
+          // (re)running is stale — don't show it as if it belonged to the current pass.
+          const isStale = i > activeIndex || (isActive && run.status === "training");
+          const decision = isStale ? undefined : decisionForAgent(stage.agentName);
           return (
             <Step key={stage.status} completed={i < activeIndex || run.status === "completed"}>
               <StepLabel

@@ -11,6 +11,8 @@ uses (so the comparison is apples-to-apples).
 """
 from __future__ import annotations
 
+import logging
+
 import numpy as np
 from sklearn.model_selection import GridSearchCV, RandomizedSearchCV
 
@@ -23,6 +25,8 @@ from app.plugins.classification_base import ClassificationPluginRun
 from app.plugins.registry import CLASSIFICATION_PLUGIN_REGISTRY, REGRESSION_PLUGIN_REGISTRY
 from app.plugins.regression_base import RegressionPluginRun
 from app.services import evaluation_service
+
+logger = logging.getLogger(__name__)
 
 RANDOM_SEARCH_THRESHOLD = 30
 RANDOM_SEARCH_N_ITER = 15
@@ -95,7 +99,10 @@ def optimize(
     config = config or {}
     search_space = {**settings["default_config"].get(algorithm, {}), **config.get(algorithm, {})}
     if not search_space:
-        return {"algorithm": algorithm, "skipped": True, "reason": "No hyperparameter search space registered."}
+        return {
+            "algorithm": algorithm, "skipped": True, "status": "skipped",
+            "reason": "No hyperparameter search space registered.",
+        }
 
     baseline_params = plugin.param_grid({k: v for k, v in search_space.items()})[0]
     build = getattr(plugin, "build_configured", plugin.build_model)  # classification honours class_weight
@@ -111,6 +118,7 @@ def optimize(
 
     key_baseline = baseline_metrics.get(_KEY_METRIC[problem_type])
     early_stopped = key_baseline is not None and key_baseline >= budget.get("early_stop_at", EARLY_STOP_AT)
+    error: str | None = None
     estimator = build(baseline_params)
     try:
         if early_stopped:
@@ -129,15 +137,29 @@ def optimize(
             best_model = search.best_estimator_
             best_params = search.best_params_
             n_trials = len(search.cv_results_["params"])
-    except Exception:
+    except Exception as exc:  # noqa: BLE001 — keep the baseline, but never silently
+        logger.exception("HPO search failed for %s; falling back to baseline params", algorithm)
+        error = f"{type(exc).__name__}: {exc}"
         best_model, best_params, n_trials = baseline_model, baseline_params, 1
 
     optimized_run = _build_run(settings["run_cls"], algorithm, best_params, best_model, X_test)
     optimized_metrics = settings["evaluate"](y_test, optimized_run)
 
+    key_metric = _KEY_METRIC[problem_type]
+    if error:
+        status = "failed"
+    elif early_stopped:
+        status = "early_stopped"
+    elif (optimized_metrics.get(key_metric) or 0) > (baseline_metrics.get(key_metric) or 0):
+        status = "improved"
+    else:
+        status = "no_improvement"  # search ran fine; the baseline params were already the best found
+
     return {
         "algorithm": algorithm,
         "skipped": False,
+        "status": status,
+        "error": error,
         "baseline_params": baseline_params,
         "baseline_metrics": baseline_metrics,
         "best_params": best_params,

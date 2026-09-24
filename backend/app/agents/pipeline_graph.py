@@ -536,6 +536,8 @@ def _run_hpo(db, run: PipelineRunORM, job: JobORM, plan_fields: dict) -> None:
         f"{r['algorithm']}: baseline {key_metric}={r.get('baseline_metrics', {}).get(key_metric)} -> "
         f"optimized {key_metric}={r.get('optimized_metrics', {}).get(key_metric)} "
         f"({r.get('n_trials', 0)} trial(s)" + (", stopped early — baseline already near-perfect)" if r.get("early_stopped") else ")")
+        + (f" [HPO FAILED, baseline kept: {r['error']}]" if r.get("status") == "failed" else "")
+        + (" [search ran; no better params than baseline]" if r.get("status") == "no_improvement" else "")
         for r in results if not r.get("skipped")
     ) or "No algorithms had a registered search space."
     reasoning = f"[{budget['tier']} budget: {budget['n_train_rows']} training rows] " + reasoning

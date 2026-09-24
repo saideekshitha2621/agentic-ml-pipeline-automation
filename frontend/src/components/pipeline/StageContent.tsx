@@ -169,6 +169,7 @@ const _HPO_METRIC_PRIORITY: { key: string; label: string }[] = [
 export function HPOContent({ decision }: { decision: AgentDecision }) {
   const results = (decision.decision_json.results ?? []) as {
     algorithm: string; skipped?: boolean; baseline_metrics?: Record<string, number>; optimized_metrics?: Record<string, number>; best_params?: Record<string, unknown>; n_trials?: number;
+    status?: "improved" | "no_improvement" | "early_stopped" | "failed" | "skipped"; error?: string | null;
   }[];
   const metric = _HPO_METRIC_PRIORITY.find((m) =>
     results.some((r) => !r.skipped && r.baseline_metrics && m.key in r.baseline_metrics)
@@ -187,7 +188,24 @@ export function HPOContent({ decision }: { decision: AgentDecision }) {
             <TableCell>{r.algorithm.replace(/_/g, " ")}</TableCell>
             <TableCell>{r.skipped ? "—" : r.baseline_metrics?.[metric.key]?.toFixed(3)}</TableCell>
             <TableCell>{r.skipped ? "—" : r.optimized_metrics?.[metric.key]?.toFixed(3)}</TableCell>
-            <TableCell>{r.skipped ? "n/a" : JSON.stringify(r.best_params)}</TableCell>
+            <TableCell>
+              {r.skipped ? "n/a" : JSON.stringify(r.best_params)}
+              {r.status === "failed" && (
+                <Typography variant="caption" color="error" display="block">
+                  HPO failed — baseline kept{r.error ? `: ${r.error}` : ""}
+                </Typography>
+              )}
+              {r.status === "no_improvement" && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Search ran — baseline params were already the best
+                </Typography>
+              )}
+              {r.status === "early_stopped" && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  Skipped search — baseline already near-perfect
+                </Typography>
+              )}
+            </TableCell>
             <TableCell align="right">{r.n_trials ?? "—"}</TableCell>
           </TableRow>
         ))}
