@@ -21,10 +21,16 @@ provider unavailable rather than crashing the app.
 """
 from __future__ import annotations
 
+import logging
 import os
 
-from app.core.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY
+from app.core.config import (
+    ANTHROPIC_API_KEY, ANTHROPIC_MODEL, GEMINI_API_KEY, GOVERNANCE_BASE_URL, GOVERNANCE_KEY,
+    GOVERNANCE_MODEL, GROQ_API_KEY, OPENAI_API_KEY,
+)
 from app.services import llm_key_manager as _km
+
+logger = logging.getLogger("llm_service")
 
 _SYSTEM_EXPLAIN = (
     "You are an AutoML pipeline agent explaining a technical decision to a business "
@@ -43,13 +49,28 @@ _DEFAULT_MODELS = {
     # actual available model list (`client.models.list()`), which does not include the
     # llama-3.x models many Groq docs/examples assume.
     "groq": os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b"),
+    # Model name sent to the Governance Proxy (env `MODEL`) — must be a model the governance
+    # server has a deployment for.
+    "governance": GOVERNANCE_MODEL,
 }
+
+# When GOVERNANCE_BASE_URL + GOVERNANCE_KEY are both set, ALL LLM traffic goes through the
+# Governance Proxy (OpenAI-compatible, `{base}/proxy`) and no provider is ever called
+# directly — the direct-provider keys are ignored so nothing can bypass budget/PII/rate-limit
+# enforcement and the audit trail.
+GOVERNANCE_ENABLED = bool(GOVERNANCE_BASE_URL and GOVERNANCE_KEY)
+_GOVERNANCE_PROXY_URL = f"{GOVERNANCE_BASE_URL.rstrip('/')}/proxy" if GOVERNANCE_BASE_URL else ""
 
 # Anthropic first (unchanged from the original single-key precedence), then OpenAI, Gemini,
 # Groq — override with LLM_PROVIDER_ORDER="groq,anthropic,openai,gemini" (comma-separated) if
 # desired, e.g. to try a fast/free Groq key before the others.
 _env_order = os.environ.get("LLM_PROVIDER_ORDER")
 _PROVIDER_ORDER = [p.strip() for p in _env_order.split(",") if p.strip()] if _env_order else ["anthropic", "openai", "gemini", "groq"]
+if GOVERNANCE_ENABLED:
+    _PROVIDER_ORDER = ["governance"]
+    logger.info("LLM routing: Governance Proxy ENABLED — base_url=%s model=%s (direct providers disabled)", _GOVERNANCE_PROXY_URL, GOVERNANCE_MODEL)
+else:
+    logger.info("LLM routing: Governance Proxy not configured (set GOVERNANCE_BASE_URL and GOVERNANCE_KEY) — calling providers directly")
 
 
 def _pooled_keys(prefix: str, primary: str | None) -> list[str]:
@@ -84,6 +105,7 @@ def _resolve_all_keys() -> dict[str, list[str]]:
         "openai": _pooled_keys("OPENAI", OPENAI_API_KEY),
         "gemini": _pooled_keys("GEMINI", GEMINI_API_KEY),
         "groq": _pooled_keys("GROQ", GROQ_API_KEY),
+        "governance": [GOVERNANCE_KEY] if GOVERNANCE_ENABLED else [],
     }
 
 
@@ -145,6 +167,41 @@ def _call_groq(api_key: str, model: str, system: str, messages: list[dict], max_
     return text
 
 
+def _governance_client(governance_key: str):
+    """OpenAI SDK client pointed at the Governance Proxy. The governance key goes in
+    `X-Governance-Key`; `api_key` is only a placeholder because the SDK insists on one."""
+    from openai import OpenAI
+
+    return OpenAI(
+        api_key=governance_key, base_url=_GOVERNANCE_PROXY_URL,
+        default_headers={"X-Governance-Key": governance_key},
+        # The proxy retries/fails over internally for up to ~90s; a shorter client timeout
+        # would fire while it is still legitimately working.
+        timeout=120.0,
+    )
+
+
+def _log_governance(model: str, ok: bool, detail: str = "") -> None:
+    if ok:
+        logger.info("Governance routing OK: model=%s base_url=%s routed_via_governance=True", model, _GOVERNANCE_PROXY_URL)
+    else:
+        logger.error("Governance routing FAILED: model=%s base_url=%s routed_via_governance=False error=%s", model, _GOVERNANCE_PROXY_URL, detail)
+
+
+def _call_governance(api_key: str, model: str, system: str, messages: list[dict], max_tokens: int) -> str:
+    logger.info("Governance request: model=%s base_url=%s", model, _GOVERNANCE_PROXY_URL)
+    try:
+        response = _governance_client(api_key).chat.completions.create(
+            model=model, max_tokens=max_tokens,
+            messages=[{"role": "system", "content": system}, *messages],
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log_governance(model, False, str(exc)[:200])
+        raise
+    _log_governance(model, True)
+    return (response.choices[0].message.content or "").strip()
+
+
 def _call_gemini(api_key: str, model: str, system: str, messages: list[dict], max_tokens: int) -> str:
     import google.generativeai as genai
 
@@ -166,7 +223,7 @@ def _call_gemini(api_key: str, model: str, system: str, messages: list[dict], ma
     return (response.text or "").strip()
 
 
-_DISPATCH = {"anthropic": _call_anthropic, "openai": _call_openai, "gemini": _call_gemini, "groq": _call_groq}
+_DISPATCH = {"anthropic": _call_anthropic, "openai": _call_openai, "gemini": _call_gemini, "groq": _call_groq, "governance": _call_governance}
 
 
 # --- Rate-limit circuit breaker ----------------------------------------------------------
@@ -481,7 +538,25 @@ def _gemini_schema(schema: dict) -> dict:
     return out
 
 
-_TOOL_SESSIONS = {"anthropic": _AnthropicSession, "openai": _OpenAISession, "gemini": _GeminiSession, "groq": _GroqSession}
+class _GovernanceSession(_OpenAISession):
+    """Tool-calling session over the Governance Proxy (OpenAI-compatible wire protocol)."""
+
+    def __init__(self, config: dict, system: str, tools: list[Tool], max_tokens: int):
+        super().__init__(config, system, tools, max_tokens)
+        self._client = _governance_client(config["api_key"])
+
+    def next(self) -> tuple[str, list[tuple[str, str, dict]]]:
+        logger.info("Governance request (tool loop): model=%s base_url=%s", self._model, _GOVERNANCE_PROXY_URL)
+        try:
+            result = super().next()
+        except Exception as exc:  # noqa: BLE001
+            _log_governance(self._model, False, str(exc)[:200])
+            raise
+        _log_governance(self._model, True)
+        return result
+
+
+_TOOL_SESSIONS = {"anthropic": _AnthropicSession, "openai": _OpenAISession, "gemini": _GeminiSession, "groq": _GroqSession, "governance": _GovernanceSession}
 
 
 def _execute_tool(tool: Tool | None, args: dict) -> tuple[str, bool]:

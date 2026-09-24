@@ -49,6 +49,13 @@ GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
 
+# AI Governance Proxy. When GOVERNANCE_BASE_URL and GOVERNANCE_KEY are both set, every LLM
+# call is routed through `{GOVERNANCE_BASE_URL}/proxy` (sending `X-Governance-Key`) and the
+# direct provider keys above are ignored. MODEL is the model name requested from the proxy.
+GOVERNANCE_BASE_URL = (os.environ.get("GOVERNANCE_BASE_URL") or "").strip()
+GOVERNANCE_KEY = (os.environ.get("GOVERNANCE_KEY") or "").strip()
+GOVERNANCE_MODEL = (os.environ.get("MODEL") or "gpt-4o").strip()
+
 # SQLite by default (zero setup). For PostgreSQL set DATABASE_URL, e.g.
 # postgresql+psycopg://user:password@host:5432/automl  (and `pip install -r requirements-postgres.txt`).
 DATABASE_URL = os.environ.get("DATABASE_URL") or f"sqlite:///{(STORAGE_DIR / 'app.db').as_posix()}"
