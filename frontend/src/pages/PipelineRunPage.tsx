@@ -25,7 +25,7 @@ import {
   Tooltip,
   Typography,
 } from "@mui/material";
-import { CheckCircle, Edit, HourglassEmpty, Cancel, SmartToy, Science, Person, Bolt } from "@mui/icons-material";
+import { SmartToy, Science, Person, Bolt } from "@mui/icons-material";
 import {
   pipelineReportExportUrl,
   useExecutiveSummary,
@@ -52,20 +52,6 @@ import {
 } from "../components/pipeline/StageContent";
 import ChatPanel from "../components/pipeline/ChatPanel";
 import ExecutiveSummaryCard from "../components/pipeline/ExecutiveSummaryCard";
-
-const STATUS_COLOR: Record<string, "default" | "success" | "warning" | "error" | "info"> = {
-  proposed: "warning",
-  approved: "success",
-  edited: "info",
-  rejected: "error",
-};
-
-function StatusIcon({ status }: { status: string }) {
-  if (status === "approved") return <CheckCircle fontSize="small" color="success" />;
-  if (status === "edited") return <Edit fontSize="small" color="info" />;
-  if (status === "rejected") return <Cancel fontSize="small" color="error" />;
-  return <HourglassEmpty fontSize="small" color="warning" />;
-}
 
 /** Clearly distinguishes stages the agent auto-approved (approved_by === "system") from
  * ones a human actually reviewed and approved/edited — the core UI requirement for the
@@ -294,7 +280,7 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
 
       {isProblemDetection && targetCandidates.length > 0 && (
         <Box sx={{ mb: 2 }}>
-          <Typography variant="body2" gutterBottom>
+          <Typography variant="body1" gutterBottom>
             {requiresTargetSelection
               ? "Select the column you want to predict (the highlighted one is only a suggestion):"
               : "Target column candidates (ranked by column name and value distribution):"}
@@ -304,11 +290,10 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
               <Tooltip key={c.column} title={c.reasoning.join(" ")}>
                 <Chip
                   label={`${c.column} — ${c.problem_type} (score ${c.score})`}
-                  size="small"
                   variant={overrideTargetColumn === c.column ? "filled" : "outlined"}
                   color={overrideTargetColumn === c.column ? "primary" : "default"}
                   onClick={() => selectCandidate(c)}
-                  sx={{ justifyContent: "flex-start", maxWidth: 460 }}
+                  sx={{ justifyContent: "flex-start", maxWidth: 560, height: 36, fontSize: "1rem" }}
                 />
               </Tooltip>
             ))}
@@ -317,14 +302,14 @@ function DecisionReviewCard({ decision, pipelineRunId }: { decision: AgentDecisi
       )}
       {isProblemDetection && (
         <Stack direction="row" spacing={1} sx={{ mb: 2, alignItems: "center" }}>
-          <Typography variant="body2">
+          <Typography variant="body1">
             Problem type{overrideTargetColumn ? ` for "${overrideTargetColumn}"` : ""}:
           </Typography>
           {["clustering", "classification", "regression"].map((t) => (
             <Chip
               key={t}
               label={t}
-              size="small"
+              sx={{ height: 36, fontSize: "1rem" }}
               color={overrideType === t ? "primary" : "default"}
               onClick={() => {
                 setOverrideType(t);
@@ -520,45 +505,6 @@ export default function PipelineRunPage() {
       {pendingDecision && !PIPELINE_STAGES.some((s) => s.agentName === pendingDecision.agent_name) && (
         <DecisionReviewCard decision={pendingDecision} pipelineRunId={run.id} />
       )}
-
-      <Typography variant="h6">Agent Activity Timeline</Typography>
-      <Stack spacing={1.5}>
-        {decisions?.map((d) => (
-          <Paper key={d.id} variant="outlined" sx={{ p: 2 }}>
-            <Stack direction="row" spacing={1.5} sx={{ alignItems: "flex-start" }}>
-              <StatusIcon status={d.status} />
-              <Box sx={{ flexGrow: 1 }}>
-                <Stack direction="row" spacing={1} sx={{ alignItems: "center", flexWrap: "wrap" }}>
-                  <Typography variant="subtitle2">{d.agent_name.replace(/_/g, " ")}</Typography>
-                  {d.status === "proposed" && <Chip size="small" label="Awaiting review" color={STATUS_COLOR[d.status]} />}
-                  <ApprovalBadge decision={d} />
-                  {d.confidence !== null && (
-                    <Typography variant="caption" color="text.secondary">
-                      confidence {Math.round(d.confidence * 100)}%
-                    </Typography>
-                  )}
-                  <Typography variant="caption" color="text.secondary" sx={{ ml: "auto" }}>
-                    {new Date(d.created_at).toLocaleTimeString()}
-                  </Typography>
-                </Stack>
-                <Typography variant="body2" sx={{ mt: 0.5 }}>
-                  {d.reasoning_text}
-                </Typography>
-                {d.override_reason && (
-                  <Typography variant="body2" color="error.main" sx={{ mt: 0.5 }}>
-                    Override reason: {d.override_reason}
-                  </Typography>
-                )}
-                {(d.decision_json.approval_reason as string | undefined) && (
-                  <Typography variant="caption" color="text.secondary" sx={{ display: "block", mt: 0.5, fontStyle: "italic" }}>
-                    {d.decision_json.approval_reason as string}
-                  </Typography>
-                )}
-              </Box>
-            </Stack>
-          </Paper>
-        ))}
-      </Stack>
 
       {run.status === "completed" && report && (
         <Paper variant="outlined" sx={{ p: 3 }}>
