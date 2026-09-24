@@ -43,8 +43,12 @@ _STRONG_TARGET_NAMES = {"target", "label", "y", "outcome", "class", "result"}
 _CLASSIFICATION_NAME_HINTS = [
     "churn", "purchased", "purchase", "fraud", "default", "approved", "approval",
     "convert", "response", "status", "flag", "is_", "has_", "success", "failure",
-    "dangerous", "risk", "outcome", "diagnosis", "attrition",
+    "dangerous", "risk", "outcome", "diagnosis", "attrition", "churned", "cancelled", "canceled",
 ]
+# Columns that only exist *after* the outcome happened (why they left, when they cancelled, exit
+# survey) describe the outcome rather than being it — e.g. `churn_reason` contains "churn" but is
+# a post-hoc leak of `churned_next_30d`. They must never outrank the real outcome column.
+_POST_OUTCOME_TOKENS = {"reason", "reasons", "cancellation", "exit", "survey"}
 _REGRESSION_NAME_HINTS = [
     "price", "cost", "amount", "revenue", "sales", "salary", "income", "score",
     "rating", "value", "total", "charge", "fee", "duration", "demand", "profit",
@@ -87,6 +91,8 @@ def _name_pattern_score(column: str) -> tuple[float, str | None]:
     # Whole-word match only: substring matching made "PURCHASES_FREQUENCY" look like an
     # outcome because it contains "purchase". Hints ending in "_" (is_, has_) are prefixes.
     tokens = set(re.split(r"[^a-z0-9]+", normalized))
+    if tokens & _POST_OUTCOME_TOKENS:
+        return -0.4, f"Column name '{column}' looks like a post-outcome field (reason/cancellation/exit survey), likely leaking the real target."
     for kw in _CLASSIFICATION_NAME_HINTS:
         if (normalized.startswith(kw) if kw.endswith("_") else kw in tokens):
             return 0.25, f"Column name contains '{kw}', a common outcome/label keyword."

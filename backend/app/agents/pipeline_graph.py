@@ -68,6 +68,7 @@ from app.services import (
     llm_service,
     metric_glossary,
     preprocessing_service,
+    ranking_service,
     run_memory_service,
 )
 from app.agents import (
@@ -494,11 +495,41 @@ def _run_hpo(db, run: PipelineRunORM, job: JobORM, plan_fields: dict) -> None:
         results.append({k: v for k, v in result.items() if k != "run"})
         if result.get("skipped"):
             continue
-        best_run = next((r for r in job.runs if r.algorithm == algorithm), None)
+        # A single algorithm's baseline stage can produce several ModelRun rows — one per
+        # hyperparameter combination in that plugin's default grid (ClassificationPlugin.run()
+        # loops param_grid(config)) — so picking the *first* matching row (previously
+        # `next(...)`) attached the optimized result to an arbitrary row rather than that
+        # algorithm's actual best baseline row, leaving the true best baseline row stale.
+        best_run = min(
+            (r for r in job.runs if r.algorithm == algorithm),
+            key=lambda r: r.rank if r.rank is not None else float("inf"),
+            default=None,
+        )
         if best_run is not None:
             best_run.baseline_metrics_json = result["baseline_metrics"]
             best_run.params_json = result["best_params"]
             best_run.metrics_json = result["optimized_metrics"]
+
+    # Every rank/composite_score on job.runs was computed once, before HPO, from baseline
+    # metrics only (job_runner_service._run_classification/_run_regression). HPO above just
+    # overwrote metrics_json with post-optimization values for the algorithm(s) it improved,
+    # but never recomputed rank/composite_score — so _record_evaluation_summary and
+    # recommendation_agent (both of which pick "the champion" by `rank`) could keep pointing
+    # at the pre-HPO #1 even after a different algorithm's HPO run made it the actual best,
+    # while displaying that stale champion's post-HPO metrics. Recompute the leaderboard now
+    # that every selected algorithm has finished both baseline training AND optimization, so
+    # results/rank/recommendation are only ever calculated from fully-finished processing.
+    evaluated_rows = [
+        {"run_id": i, "algorithm": r.algorithm, "params": r.params_json, **(r.metrics_json or {})}
+        for i, r in enumerate(job.runs)
+    ]
+    leaderboard = ranking_service.rank(evaluated_rows, problem_type=run.problem_type)
+    rank_by_index = {int(row["run_id"]): row for row in leaderboard.to_dict("records")}
+    for i, r in enumerate(job.runs):
+        lb_row = rank_by_index.get(i)
+        if lb_row:
+            r.composite_score = lb_row.get("composite_score")
+            r.rank = lb_row.get("rank")
     db.commit()
 
     reasoning = "; ".join(

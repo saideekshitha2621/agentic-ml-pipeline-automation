@@ -55,12 +55,20 @@ def propose(
     # often highly-predictive numeric feature gets silently dropped from modeling (this
     # is exactly what happened to a regression target's most important feature).
     id_like = set()
+    # Integer, near-unique, non-id-named columns (e.g. `customer_number`, `acct_no`) are
+    # deliberately not auto-dropped as id_like (see comment above), but silently keeping them
+    # as an ordinary numeric feature risks the model memorizing a sequential/cohort-correlated
+    # ID rather than learning a real pattern — since train_test_split sends each unique ID to
+    # only one side, such memorization can look good on the held-out test set without
+    # generalizing. Surface these for human review instead of silently deciding either way.
+    ambiguous_id_like = set()
     for c in df.columns:
         if pd.api.types.is_float_dtype(df[c]):
             continue
         if df[c].nunique(dropna=True) / n_rows <= ID_LIKE_UNIQUENESS_THRESHOLD:
             continue
         if pd.api.types.is_integer_dtype(df[c]) and not _looks_like_identifier_name(c):
+            ambiguous_id_like.add(c)
             continue
         id_like.add(c)
 
@@ -115,6 +123,13 @@ def propose(
             continue
 
         flags = ["high_cardinality"] if col in high_card_cols and column_type == "categorical" else []
+        if col in ambiguous_id_like:
+            flags.append("ambiguous_id_like")
+            revision_notes.append(
+                f"'{col}' is nearly all-unique but its name doesn't look like an identifier — kept as a "
+                "feature; confirm it isn't a row/customer ID before training, since the model could otherwise "
+                "memorize it rather than learn a generalizable pattern."
+            )
         if col in leakage_cols:
             flags.append("possible_leakage_kept_after_review")
             revision_notes.append(f"Kept '{col}' (flagged for possible leakage) after your rejection — verify it is available at prediction time.")
@@ -125,6 +140,9 @@ def propose(
             if "possible_leakage_kept_after_review" in flags:
                 issue = "Possible leakage (kept after review)"
                 reason = "Flagged as a potential leak of the target, but kept because you rejected dropping it — confirm it is known at prediction time."
+            elif "ambiguous_id_like" in flags:
+                issue = "Possibly an identifier (kept for review)"
+                reason = f"{df[col].nunique()} nearly-unique values but the name doesn't look like an ID — kept as a feature; confirm it isn't a row/customer identifier."
             else:
                 issue = "High cardinality" if flags else "No issues detected."
                 reason = "Consider grouping rare categories or dropping this column before encoding." if flags else "No missing values — no action needed."

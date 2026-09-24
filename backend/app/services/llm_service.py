@@ -1,4 +1,4 @@
-"""Multi-provider LLM wrapper (Anthropic/Gemini/OpenAI), used for two things:
+"""Multi-provider LLM wrapper (Anthropic/Gemini/OpenAI/Groq), used for two things:
 
 1. `explain()` — turn a stage's structured decision payload into a business-language
    narrative sentence or two. Falls back to a plain template render when no provider is
@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import os
 
-from app.core.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, GEMINI_API_KEY, OPENAI_API_KEY
+from app.core.config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL, GEMINI_API_KEY, GROQ_API_KEY, OPENAI_API_KEY
 from app.services import llm_key_manager as _km
 
 _SYSTEM_EXPLAIN = (
@@ -32,12 +32,24 @@ _SYSTEM_EXPLAIN = (
     "'Sure' or 'Here is'. Be concrete: cite the numbers given."
 )
 
-_DEFAULT_MODELS = {"anthropic": ANTHROPIC_MODEL, "gemini": "gemini-3.6-flash", "openai": "gpt-4o-mini"}
+_DEFAULT_MODELS = {
+    "anthropic": ANTHROPIC_MODEL, "gemini": "gemini-3.6-flash", "openai": "gpt-4o-mini",
+    # openai/gpt-oss-120b (Groq's previous default) intermittently emits a tool call named
+    # "JSON" that was never declared once it's done reasoning and wants to hand back its
+    # final answer — Groq's API rejects the whole response with a 400 before it ever reaches
+    # _execute_tool, breaking every agent that uses run_tool_loop. openai/gpt-oss-20b instead
+    # loops without ever emitting a final answer. qwen/qwen3.8-27b has reliable native
+    # function-calling on Groq and returns clean JSON — verified against this account's
+    # actual available model list (`client.models.list()`), which does not include the
+    # llama-3.x models many Groq docs/examples assume.
+    "groq": os.environ.get("GROQ_MODEL", "qwen/qwen3.8-27b"),
+}
 
-# Anthropic first (unchanged from the original single-key precedence), then OpenAI, then
-# Gemini — override with LLM_PROVIDER_ORDER="openai,gemini" (comma-separated) if desired.
+# Anthropic first (unchanged from the original single-key precedence), then OpenAI, Gemini,
+# Groq — override with LLM_PROVIDER_ORDER="groq,anthropic,openai,gemini" (comma-separated) if
+# desired, e.g. to try a fast/free Groq key before the others.
 _env_order = os.environ.get("LLM_PROVIDER_ORDER")
-_PROVIDER_ORDER = [p.strip() for p in _env_order.split(",") if p.strip()] if _env_order else ["anthropic", "openai", "gemini"]
+_PROVIDER_ORDER = [p.strip() for p in _env_order.split(",") if p.strip()] if _env_order else ["anthropic", "openai", "gemini", "groq"]
 
 
 def _pooled_keys(prefix: str, primary: str | None) -> list[str]:
@@ -71,6 +83,7 @@ def _resolve_all_keys() -> dict[str, list[str]]:
         "anthropic": _pooled_keys("ANTHROPIC", ANTHROPIC_API_KEY),
         "openai": _pooled_keys("OPENAI", OPENAI_API_KEY),
         "gemini": _pooled_keys("GEMINI", GEMINI_API_KEY),
+        "groq": _pooled_keys("GROQ", GROQ_API_KEY),
     }
 
 
@@ -108,6 +121,30 @@ def _call_openai(api_key: str, model: str, system: str, messages: list[dict], ma
     return (response.choices[0].message.content or "").strip()
 
 
+_GROQ_BASE_URL = "https://api.groq.com/openai/v1"
+
+
+def _call_groq(api_key: str, model: str, system: str, messages: list[dict], max_tokens: int) -> str:
+    # Groq's API is OpenAI-compatible (same request/response shape) — the `openai` package's
+    # client just needs to be pointed at Groq's base_url instead of OpenAI's.
+    from openai import OpenAI
+
+    client = OpenAI(api_key=api_key, base_url=_GROQ_BASE_URL)
+    response = client.chat.completions.create(
+        model=model, max_tokens=max_tokens,
+        messages=[{"role": "system", "content": system}, *messages],
+    )
+    choice = response.choices[0]
+    text = (choice.message.content or "").strip()
+    # Reasoning models (e.g. openai/gpt-oss-*) can spend the entire max_tokens budget on the
+    # internal `reasoning` field and return empty `content` with finish_reason="length" — the
+    # same failure mode already handled for Gemini below. Raise instead of returning empty
+    # text, so the caller's deterministic fallback is used rather than silently showing nothing.
+    if not text and choice.finish_reason == "length":
+        raise RuntimeError("Groq response spent the entire token budget on reasoning with no visible answer; discarding empty output.")
+    return text
+
+
 def _call_gemini(api_key: str, model: str, system: str, messages: list[dict], max_tokens: int) -> str:
     import google.generativeai as genai
 
@@ -129,7 +166,7 @@ def _call_gemini(api_key: str, model: str, system: str, messages: list[dict], ma
     return (response.text or "").strip()
 
 
-_DISPATCH = {"anthropic": _call_anthropic, "openai": _call_openai, "gemini": _call_gemini}
+_DISPATCH = {"anthropic": _call_anthropic, "openai": _call_openai, "gemini": _call_gemini, "groq": _call_groq}
 
 
 # --- Rate-limit circuit breaker ----------------------------------------------------------
@@ -243,10 +280,10 @@ def chat(question: str, grounding_context: str, history: list[dict]) -> str:
     if not key_manager.is_configured():
         return (
             "Conversational Q&A needs an LLM provider configured — set ANTHROPIC_API_KEY, "
-            "GEMINI_API_KEY, or OPENAI_API_KEY (or their _1/_2/... numbered / _KEYS "
-            "comma-separated multi-key variants) in the backend's environment. Once set, I "
-            "can answer questions grounded in this run's dataset profile, agent decisions, "
-            "and model results."
+            "GEMINI_API_KEY, OPENAI_API_KEY, or GROQ_API_KEY (or their _1/_2/... numbered / "
+            "_KEYS comma-separated multi-key variants) in the backend's environment. Once "
+            "set, I can answer questions grounded in this run's dataset profile, agent "
+            "decisions, and model results."
         )
     try:
         system = (
@@ -365,6 +402,22 @@ class _OpenAISession:
             self._messages.append({"role": "tool", "tool_call_id": cid, "content": out})
 
 
+class _GroqSession(_OpenAISession):
+    """Identical wire protocol to `_OpenAISession` — Groq's Chat Completions + tool-calling
+    API is OpenAI-compatible — just constructed against Groq's base_url."""
+
+    def __init__(self, config: dict, system: str, tools: list[Tool], max_tokens: int):
+        from openai import OpenAI
+
+        self._client = OpenAI(api_key=config["api_key"], base_url=_GROQ_BASE_URL)
+        self._model, self._max_tokens = config["model"], max_tokens
+        self._tools = [
+            {"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.parameters}}
+            for t in tools
+        ]
+        self._messages: list[dict] = [{"role": "system", "content": system}]
+
+
 class _GeminiSession:
     """Gemini function calling via google.generativeai. Gemini matches tool results to calls
     by function *name* (no call ids), so ids here are synthetic and mapped back to names."""
@@ -428,7 +481,7 @@ def _gemini_schema(schema: dict) -> dict:
     return out
 
 
-_TOOL_SESSIONS = {"anthropic": _AnthropicSession, "openai": _OpenAISession, "gemini": _GeminiSession}
+_TOOL_SESSIONS = {"anthropic": _AnthropicSession, "openai": _OpenAISession, "gemini": _GeminiSession, "groq": _GroqSession}
 
 
 def _execute_tool(tool: Tool | None, args: dict) -> tuple[str, bool]:

@@ -14,8 +14,98 @@ from app.services import profiling_service
 
 HIGH_CARDINALITY_ABS = 50
 HIGH_CARDINALITY_RATIO = 0.5
-LEAKAGE_CORR_THRESHOLD = 0.98
 MIN_ROWS_TO_TRAIN = 10
+# Model-based leakage probe (replaces a numeric-only Pearson-correlation check that silently
+# skipped categorical/date leak columns like `cancellation_date` or `churn_reason`, and whose
+# 0.98 threshold a noisy real-world leak like `exit_survey_score` would rarely reach). A shallow
+# single-feature decision tree can use ONE column (numeric or one-hot-encoded categorical) to
+# predict the target; a near-perfect score means that column is very likely leaking the answer
+# rather than genuinely predicting it.
+LEAKAGE_PROBE_MAX_ROWS = 2000
+LEAKAGE_PROBE_MAX_CATEGORIES = 50  # beyond this, one-hot-encoding a single column for the probe is too costly/noisy
+# A single strong (but legitimate) numeric predictor can score high in absolute terms without
+# being a leak (e.g. an "amount" feature that a skewed/imbalanced label was largely derived
+# from can reach ~97% single-feature accuracy against an 88% majority-class baseline). Requiring
+# BOTH a very high absolute score AND a large lift over the naive baseline avoids flagging that
+# case, while a near-total single-feature score (>= NEAR_PERFECT) is still flagged regardless of
+# lift, since that level of single-column determinism is implausible for a genuine feature.
+LEAKAGE_PROBE_SCORE_THRESHOLD = 0.95  # accuracy (classification) or r2 (regression) from ONE column alone
+LEAKAGE_PROBE_LIFT_THRESHOLD = 0.20  # required accuracy lift over the majority-class baseline (classification only)
+LEAKAGE_PROBE_NEAR_PERFECT = 0.99  # flagged regardless of lift/baseline at this level
+# Post-outcome fields are often only *populated* for one class (e.g. `exit_survey_score` or
+# `cancellation_date` only exist for churned customers, NaN otherwise) — the value-based probe
+# above can't see this at all, because dropping rows with a missing value in that column also
+# drops every row that would prove it's a leak, leaving a single-class target it skips. This
+# checks the null/non-null *pattern* itself against the target instead.
+LEAKAGE_MISSINGNESS_GAP_THRESHOLD = 0.8  # gap between per-class null rates
+
+
+def _leakage_scores(df: pd.DataFrame, target_column: str) -> dict[str, float]:
+    """Single-feature leakage probe for every non-target, non-constant column — numeric or
+    categorical alike (a shallow decision tree can use either). Runs on a capped sample so
+    validation stays fast even on large datasets."""
+    import numpy as np
+    from sklearn.model_selection import cross_val_score
+    from sklearn.tree import DecisionTreeClassifier, DecisionTreeRegressor
+
+    sample = df if len(df) <= LEAKAGE_PROBE_MAX_ROWS else df.sample(LEAKAGE_PROBE_MAX_ROWS, random_state=0)
+    y_full = sample[target_column]
+    is_regression = pd.api.types.is_numeric_dtype(y_full) and y_full.nunique(dropna=True) > 20
+    baseline = 0.0 if is_regression else float(y_full.value_counts(normalize=True, dropna=True).max() or 0.0)
+
+    scores: dict[str, float] = {}
+    for col in df.columns:
+        if col == target_column or df[col].nunique(dropna=True) <= 1:
+            continue
+        is_numeric = pd.api.types.is_numeric_dtype(df[col])
+        if not is_numeric and df[col].nunique(dropna=True) > LEAKAGE_PROBE_MAX_CATEGORIES:
+            continue  # already surfaced separately as a high-cardinality column
+        data = sample[[col, target_column]].dropna()
+        if len(data) < 20:
+            continue
+        x = data[[col]] if is_numeric else pd.get_dummies(data[[col]])
+        y = data[target_column]
+        if not is_regression and y.nunique(dropna=True) < 2:
+            continue
+        model = DecisionTreeRegressor(max_depth=3) if is_regression else DecisionTreeClassifier(max_depth=3)
+        try:
+            score = float(np.mean(cross_val_score(model, x, y, cv=3, scoring="r2" if is_regression else "accuracy")))
+        except ValueError:
+            continue
+        if is_regression:
+            if score >= LEAKAGE_PROBE_NEAR_PERFECT:
+                scores[col] = score
+        elif score >= LEAKAGE_PROBE_NEAR_PERFECT or (
+            score >= LEAKAGE_PROBE_SCORE_THRESHOLD and (score - baseline) >= LEAKAGE_PROBE_LIFT_THRESHOLD
+        ):
+            scores[col] = score
+    return scores
+
+
+def _missingness_leak_scores(df: pd.DataFrame, target_column: str) -> dict[str, float]:
+    """Flags columns whose null/non-null pattern almost perfectly separates the target's
+    classes — a common real-world leak the value-based probe above cannot see (see module
+    docstring above `LEAKAGE_MISSINGNESS_GAP_THRESHOLD`). Classification only: a regression
+    target has no small set of classes to group null-rates by."""
+    y = df[target_column]
+    if pd.api.types.is_numeric_dtype(y) and y.nunique(dropna=True) > 20:
+        return {}
+    classes = y.dropna().unique()
+    if not (2 <= len(classes) <= 10):
+        return {}
+    scores: dict[str, float] = {}
+    for col in df.columns:
+        if col == target_column:
+            continue
+        is_null = df[col].isna()
+        n_null = int(is_null.sum())
+        if n_null == 0 or n_null == len(df):
+            continue  # no missingness, or 100% missing (already flagged separately)
+        null_rate_by_class = df.groupby(y, observed=True)[col].apply(lambda s: s.isna().mean())
+        gap = float(null_rate_by_class.max() - null_rate_by_class.min())
+        if gap >= LEAKAGE_MISSINGNESS_GAP_THRESHOLD:
+            scores[col] = round(gap, 3)
+    return scores
 
 
 def _status(n_bad: int, warn_at: int = 1, critical_at: int | None = None) -> str:
@@ -155,26 +245,19 @@ def validate(df: pd.DataFrame, profile: dict, target_column: str | None = None, 
     )
 
     leakage_cols: list[str] = []
-    if target_column and target_column in df.columns:
-        numeric_cols = df.select_dtypes(include="number").columns.drop(target_column, errors="ignore")
-        if len(numeric_cols):
-            # Label-encode a categorical target (the common case for classification — most
-            # targets are "yes"/"no"/class-name strings, not numbers) so the same correlation
-            # check applies; a numeric target is already usable as-is.
-            target_series = (
-                df[target_column] if pd.api.types.is_numeric_dtype(df[target_column])
-                else df[target_column].astype("category").cat.codes.replace(-1, pd.NA)
-            )
-            corr = df[numeric_cols].corrwith(target_series).abs()
-            leakage_cols = corr[corr > LEAKAGE_CORR_THRESHOLD].index.tolist()
+    if target_column and target_column in df.columns and int(df[target_column].dropna().shape[0]) >= 20:
+        try:
+            leakage_cols = sorted(set(_leakage_scores(df, target_column)) | set(_missingness_leak_scores(df, target_column)))
+        except Exception:
+            leakage_cols = []
     checks.append(
         {
             "name": "Data leakage risk",
             "status": _status(len(leakage_cols), critical_at=1),
-            "detail": f"{len(leakage_cols)} column(s) correlate almost perfectly with the target — "
-            "likely leak the answer rather than predict it."
+            "detail": f"{len(leakage_cols)} column(s), alone, can almost perfectly predict the target — "
+            "likely leak the answer rather than genuinely predict it."
             if leakage_cols
-            else "No columns show suspiciously high correlation with the target.",
+            else "No columns show suspiciously high single-feature predictive power against the target.",
             "affected_columns": leakage_cols,
         }
     )

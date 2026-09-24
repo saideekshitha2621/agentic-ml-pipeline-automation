@@ -16,7 +16,7 @@ from app.services import llm_service, task_queue_service
 
 @pytest.fixture(autouse=True)
 def _isolated_environment(monkeypatch):
-    for name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY"):
+    for name in ("ANTHROPIC_API_KEY", "GEMINI_API_KEY", "OPENAI_API_KEY", "GROQ_API_KEY"):
         monkeypatch.setattr(llm_service, name, None)
         prefix = name.rsplit("_API_KEY", 1)[0]
         monkeypatch.delenv(f"{prefix}_API_KEYS", raising=False)

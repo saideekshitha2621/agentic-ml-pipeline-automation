@@ -22,6 +22,9 @@ import pandas as pd
 from app.agents import dataset_tools, problem_detection_agent
 from app.services import llm_service
 
+CONFIDENT_TOP_SCORE = 0.5
+CONFIDENT_MARGIN = 0.15
+
 _SYSTEM = (
     "You are the problem-detection agent of an AutoML pipeline. Decide which column, if any, "
     "is the prediction target. Use the tools to inspect candidate columns before deciding — "
@@ -52,8 +55,16 @@ def detect(
     if not candidates:  # declared target, or nothing target-like — nothing for an LLM to decide
         return _with_fallback(base, "not_applicable")
 
+    # A clear heuristic winner (real outcome-name signal + a solid lead over the runner-up) is kept
+    # as-is: the LLM's pick varies run to run and by which provider answers, so re-uploading the
+    # same file could otherwise propose a different target each time.
+    top_score = candidates[0]["score"]
+    runner_up = candidates[1]["score"] if len(candidates) > 1 else 0.0
+    if top_score >= CONFIDENT_TOP_SCORE and top_score - runner_up >= CONFIDENT_MARGIN:
+        return _with_fallback(base, "confident_heuristic")
+
     names = [c["column"] for c in candidates]
-    user = json.dumps({
+    user =json.dumps({
         "candidates": candidates[:10],
         "heuristic_choice": base["target_column"],
         "n_rows": len(df),
@@ -107,6 +118,6 @@ def detect(
 
 def summarize(result: dict) -> str:
     text = " ".join(result["reasoning"])
-    if result.get("source") == "deterministic" and result.get("fallback_reason") not in (None, "not_applicable"):
+    if result.get("source") == "deterministic" and result.get("fallback_reason") not in (None, "not_applicable", "confident_heuristic"):
         text += f" (deterministic fallback — {result['fallback_reason']})"
     return text
