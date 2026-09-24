@@ -31,7 +31,14 @@ export function usePipelineRun(pipelineRunId: string | undefined) {
     queryKey: ["pipeline-run", pipelineRunId],
     queryFn: async () => (await apiClient.get<PipelineRun>(`/api/v1/pipeline-runs/${pipelineRunId}`)).data,
     enabled: !!pipelineRunId,
-    refetchInterval: (query) => (RUNNING_STATUSES.has(query.state.data?.status ?? "") ? 1500 : false),
+    // Keep polling through the "awaiting_*" approval gates too: right after an approval the
+    // backend may not have left the gate status yet, and stopping there froze the header (and
+    // the report/PDF, which only loads once status === "completed") on the stale gate state.
+    refetchInterval: (query) => {
+      const status = query.state.data?.status ?? "";
+      if (status === "completed" || status === "failed") return false;
+      return RUNNING_STATUSES.has(status) ? 1500 : 3000;
+    },
   });
 }
 
