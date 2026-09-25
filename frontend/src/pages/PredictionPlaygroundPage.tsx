@@ -14,6 +14,7 @@ import {
   Typography,
 } from "@mui/material";
 import { usePredict, usePredictionSchema } from "../api/prediction";
+import ChatPanel from "../components/pipeline/ChatPanel";
 
 export default function PredictionPlaygroundPage() {
   const { pipelineRunId } = useParams();
@@ -105,6 +106,7 @@ export default function PredictionPlaygroundPage() {
           </Stack>
         </Paper>
       )}
+      {pipelineRunId && <ChatPanel pipelineRunId={pipelineRunId} />}
     </Stack>
   );
 }

@@ -21,11 +21,18 @@ export default function ChatPanel({ pipelineRunId }: { pipelineRunId: string }) 
 
   return (
     <>
-      <Fab color="primary" onClick={() => setOpen(true)} sx={{ position: "fixed", bottom: 24, right: 24 }}>
-        <Chat />
+      <Fab
+        variant="extended"
+        color="primary"
+        onClick={() => setOpen(true)}
+        aria-label="Ask about this pipeline"
+        sx={{ position: "fixed", bottom: 24, right: 24, zIndex: (theme) => theme.zIndex.drawer + 2 }}
+      >
+        <Chat sx={{ mr: 1 }} />
+        Ask AI
       </Fab>
       <Drawer anchor="right" open={open} onClose={() => setOpen(false)}>
-        <Box sx={{ width: 420, display: "flex", flexDirection: "column", height: "100%" }}>
+        <Box sx={{ width: { xs: "100vw", sm: 640, lg: 760 }, display: "flex", flexDirection: "column", height: "100%" }}>
           <Stack direction="row" sx={{ p: 2, alignItems: "center", justifyContent: "space-between", borderBottom: 1, borderColor: "divider" }}>
             <Typography variant="h6">Ask about this pipeline</Typography>
             <IconButton onClick={() => setOpen(false)}>
