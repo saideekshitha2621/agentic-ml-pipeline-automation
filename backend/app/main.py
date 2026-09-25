@@ -12,6 +12,7 @@ from app.routers import (
     monitoring,
     pipeline,
     prediction,
+    visualizations,
 )
 
 app = FastAPI(title="Agentic AutoML Platform", version="1.0.0")
@@ -39,6 +40,7 @@ app.include_router(pipeline.router, dependencies=_protected)
 app.include_router(prediction.router, dependencies=_protected)
 app.include_router(chat.router, dependencies=_protected)
 app.include_router(monitoring.router, dependencies=_protected)
+app.include_router(visualizations.router, dependencies=_protected)
 
 
 @app.get("/api/v1/health")

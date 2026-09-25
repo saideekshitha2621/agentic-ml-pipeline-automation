@@ -13,9 +13,53 @@ from __future__ import annotations
 
 import numpy as np
 import pandas as pd
-from sklearn.inspection import permutation_importance
+from sklearn.preprocessing import LabelEncoder
 
 from app.services import llm_service
+
+
+PERMUTATION_MAX_ROWS = 300
+PERMUTATION_MAX_FEATURES = 30
+PERMUTATION_REPEATS = 2
+
+
+def _bounded_permutation_importance(model, X: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Permutation importance whose cost does not grow with the data.
+
+    sklearn's `permutation_importance` re-scores the model for *every* column x repeat over *every*
+    row. A one-hot encoded high-cardinality column (e.g. a date with ~1,250 values) makes that
+    thousands of full-dataset predictions — hours for KNN — and stalls the finalize stage. Here rows
+    are subsampled, and only the columns most correlated with the target (a cheap filter) are
+    permuted; the rest score 0."""
+    rng = np.random.default_rng(42)
+    if len(X) > PERMUTATION_MAX_ROWS:
+        idx = rng.choice(len(X), PERMUTATION_MAX_ROWS, replace=False)
+        X, y = X[idx], y[idx]
+
+    n_features = X.shape[1]
+    if n_features > PERMUTATION_MAX_FEATURES:
+        y_num = y if np.issubdtype(np.asarray(y).dtype, np.number) else LabelEncoder().fit_transform(y)
+        Xc = X - X.mean(axis=0)
+        yc = np.asarray(y_num, dtype=float) - float(np.mean(y_num))
+        denom = np.sqrt((Xc ** 2).sum(axis=0) * (yc ** 2).sum())
+        denom = np.where(denom == 0, 1.0, denom)
+        corr = np.abs(np.nan_to_num((Xc * yc[:, None]).sum(axis=0) / denom))
+        candidates = np.argsort(corr)[::-1][:PERMUTATION_MAX_FEATURES]
+    else:
+        candidates = np.arange(n_features)
+
+    baseline = model.score(X, y)
+    importances = np.zeros(n_features)
+    work = X.copy()
+    for col in candidates:
+        original = work[:, col].copy()
+        drops = []
+        for _ in range(PERMUTATION_REPEATS):
+            work[:, col] = rng.permutation(original)
+            drops.append(baseline - model.score(work, y))
+        work[:, col] = original
+        importances[col] = float(np.mean(drops))
+    return importances
 
 
 def global_feature_importance(model, X: np.ndarray, y: np.ndarray, feature_names: list[str]) -> list[dict]:
@@ -28,8 +72,7 @@ def global_feature_importance(model, X: np.ndarray, y: np.ndarray, feature_names
 
     if importances is None or len(importances) != len(feature_names):
         try:
-            result = permutation_importance(model, X, y, n_repeats=5, random_state=42, n_jobs=1)
-            importances = result.importances_mean
+            importances = _bounded_permutation_importance(model, X, y)
         except Exception:
             importances = np.zeros(len(feature_names))
 

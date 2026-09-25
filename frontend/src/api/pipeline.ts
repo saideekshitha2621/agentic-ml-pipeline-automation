@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiClient, withApiKey } from "./client";
-import type { AgentDecision, AgentRecommendation, ExecutiveSummary, PipelineReport, PipelineRun, TrainingProgress } from "../types";
+import type { AgentDecision, AgentRecommendation, ExecutiveSummary, PipelineReport, PipelineRun, TrainingProgress, VisualizationData } from "../types";
 
 const RUNNING_STATUSES = new Set([
   "profiling",
@@ -113,5 +113,16 @@ export function useTrainingProgress(pipelineRunId: string | undefined, enabled: 
       (await apiClient.get<TrainingProgress>(`/api/v1/pipeline-runs/${pipelineRunId}/training-progress`)).data,
     enabled: !!pipelineRunId && enabled,
     refetchInterval: enabled ? 1500 : false,
+  });
+}
+
+/** Chart-ready model comparison / feature importance / confusion matrix / cluster plot data.
+ * Keyed on status so it refreshes as the run advances (results appear after training). */
+export function useVisualizations(pipelineRunId: string | undefined, status: string | undefined, enabled: boolean) {
+  return useQuery({
+    queryKey: ["pipeline-run", pipelineRunId, "visualizations", status],
+    queryFn: async () =>
+      (await apiClient.get<VisualizationData>(`/api/v1/pipeline-runs/${pipelineRunId}/visualizations`)).data,
+    enabled: !!pipelineRunId && enabled,
   });
 }

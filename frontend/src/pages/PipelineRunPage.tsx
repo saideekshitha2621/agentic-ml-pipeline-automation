@@ -30,6 +30,7 @@ import {
   pipelineReportExportUrl,
   useExecutiveSummary,
   usePipelineDecisions,
+  useVisualizations,
   usePipelineReport,
   usePipelineRun,
   useReviewDecision,
@@ -51,6 +52,7 @@ import {
   isConfusionMatrix,
 } from "../components/pipeline/StageContent";
 import ChatPanel from "../components/pipeline/ChatPanel";
+import InsightsSection from "../components/viz/InsightsSection";
 import ExecutiveSummaryCard from "../components/pipeline/ExecutiveSummaryCard";
 
 /** Clearly distinguishes stages the agent auto-approved (approved_by === "system") from
@@ -435,6 +437,7 @@ export default function PipelineRunPage() {
   const { data: report } = usePipelineReport(pipelineRunId, run?.status === "completed");
   const { data: trainingProgress } = useTrainingProgress(pipelineRunId, run?.status === "training");
   const { data: executiveSummary } = useExecutiveSummary(pipelineRunId);
+  const { data: vizData, isLoading: vizLoading } = useVisualizations(pipelineRunId, run?.status, !!run?.job_id);
 
   if (isLoading || !run) return <LinearProgress />;
 
@@ -505,6 +508,8 @@ export default function PipelineRunPage() {
       {pendingDecision && !PIPELINE_STAGES.some((s) => s.agentName === pendingDecision.agent_name) && (
         <DecisionReviewCard decision={pendingDecision} pipelineRunId={run.id} />
       )}
+
+      <InsightsSection data={vizData} loading={vizLoading} />
 
       {run.status === "completed" && report && (
         <Paper variant="outlined" sx={{ p: 3 }}>

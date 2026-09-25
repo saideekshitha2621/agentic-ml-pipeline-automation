@@ -242,3 +242,39 @@ export function modelLevelColor(level: string | null | undefined): "success" | "
   if (level === "Weak") return "error";
   return "default";
 }
+
+export interface VizMetricDef {
+  key: string;
+  label: string;
+  higher_is_better: boolean;
+}
+
+export interface VizModel {
+  run_id: string;
+  algorithm: string;
+  rank: number | null;
+  composite_score: number | null;
+  is_recommended: boolean;
+  values: Record<string, number | null>;
+  n_clusters?: number;
+}
+
+export interface VisualizationData {
+  problem_type: string | null;
+  status: string;
+  recommended_algorithm?: string | null;
+  model_comparison: { metrics: VizMetricDef[]; models: VizModel[] } | null;
+  feature_importance: {
+    algorithm: string | null;
+    features: { feature: string; importance: number; importance_pct: number }[];
+    total_features: number;
+  } | null;
+  confusion_matrix: { algorithm: string; labels: string[]; matrix: number[][] } | null;
+  cluster_plot: {
+    algorithm: string;
+    explained_variance: number[];
+    n_points_total: number;
+    points: [number, number, number][];
+    clusters: { label: number; size: number; pct: number; is_noise: boolean }[];
+  } | null;
+}
