@@ -22,6 +22,10 @@ def _isolated_environment(monkeypatch):
         monkeypatch.delenv(f"{prefix}_API_KEYS", raising=False)
         for i in range(1, 21):  # llm_key_manager's numbered multi-key variant (non-contiguous scan, 1..20)
             monkeypatch.delenv(f"{prefix}_API_KEY_{i}", raising=False)
+    # The Governance Proxy (enabled by GOVERNANCE_BASE_URL + GOVERNANCE_KEY in .env) is the first
+    # provider in the order and would receive every "LLM" call, ahead of any scripted fake.
+    monkeypatch.setattr(llm_service, "GOVERNANCE_ENABLED", False)
+    monkeypatch.setattr(llm_service.key_manager, "_provider_order", list(llm_service._DIRECT_PROVIDER_ORDER))
     monkeypatch.setattr(task_queue_service, "BACKEND", "inline")
     monkeypatch.setattr(auth, "API_KEYS", set())
     llm_service.reset_breaker()

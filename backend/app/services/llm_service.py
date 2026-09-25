@@ -66,6 +66,7 @@ _GOVERNANCE_PROXY_URL = f"{GOVERNANCE_BASE_URL.rstrip('/')}/proxy" if GOVERNANCE
 # desired, e.g. to try a fast/free Groq key before the others.
 _env_order = os.environ.get("LLM_PROVIDER_ORDER")
 _PROVIDER_ORDER = [p.strip() for p in _env_order.split(",") if p.strip()] if _env_order else ["anthropic", "openai", "gemini", "groq"]
+_DIRECT_PROVIDER_ORDER = list(_PROVIDER_ORDER)  # what applies when the Governance Proxy is off
 if GOVERNANCE_ENABLED:
     _PROVIDER_ORDER = ["governance"]
     logger.info("LLM routing: Governance Proxy ENABLED — base_url=%s model=%s (direct providers disabled)", _GOVERNANCE_PROXY_URL, GOVERNANCE_MODEL)
